@@ -55,6 +55,41 @@ export function parseLocation(input = {}) {
   return { city };
 }
 
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/**
+ * Rebuild an air report received from a client into a clean, known shape.
+ * Used server-side so only plain numbers and short strings ever reach the prompt.
+ * @param {{place?:object, air?:object}} input
+ * @param {(aqi:number)=>object} categorize
+ */
+export function sanitizeReport(input = {}, categorize) {
+  const air = input.air ?? {};
+  const usAqi = num(air.usAqi);
+  if (usAqi === null || usAqi < 0 || usAqi > 1000) throw new ValidationError('Air quality reading is missing or invalid.');
+  const p = air.pollutants ?? {};
+  const hours = Array.isArray(air.cleanestHours) ? air.cleanestHours.slice(0, 3) : [];
+  return {
+    place: { name: cleanText(input.place?.name, 120) || 'Unknown location' },
+    air: {
+      time: cleanText(air.time, 20),
+      usAqi,
+      category: categorize(usAqi),
+      pollutants: {
+        pm2_5: num(p.pm2_5),
+        pm10: num(p.pm10),
+        nitrogen_dioxide: num(p.nitrogen_dioxide),
+        ozone: num(p.ozone),
+        carbon_monoxide: num(p.carbon_monoxide),
+      },
+      pm25WhoMultiple: num(air.pm25WhoMultiple),
+      cleanestHours: hours
+        .map((h) => ({ time: cleanText(h?.time, 20), aqi: num(h?.aqi) }))
+        .filter((h) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(h.time) && h.aqi !== null),
+    },
+  };
+}
+
 /**
  * Validate the household/lifestyle profile.
  */

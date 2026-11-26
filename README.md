@@ -12,15 +12,16 @@ Every recommendation explains *why* it helps, so people understand the direct ef
 ## How it works
 
 ```
-Browser ──► Express API ──► Open-Meteo (geocoding + air quality, no key needed)
-                 │
-                 ├──► Gemini (structured JSON output, grounded on the live air data)
-                 └──► Rules engine (offline fallback when no key / AI error)
+Browser (GitHub Pages) ──► Open-Meteo (geocoding + air quality, no key needed)
+        │
+        ├──► Supabase Edge Function "air-advice" ──► Gemini (structured JSON output)
+        │         (holds GEMINI_API_KEY as a secret)
+        └──► Built-in rules engine (fallback if AI is unavailable)
 ```
 
-1. The city is geocoded, and current plus hourly air quality is fetched from the [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api) (Copernicus CAMS data).
-2. The live readings and the household profile go into a prompt for **Google Gemini**. The model must reply in a strict JSON schema (`responseJsonSchema`), so the output is always renderable.
-3. If Gemini is not configured or fails, a **deterministic rules engine** produces the same response shape, so the app always works.
+1. The browser geocodes the city and fetches current plus hourly air quality from the [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api) (Copernicus CAMS data).
+2. It sends the readings and the household profile to a **Supabase Edge Function**. The function re-validates everything, then asks **Google Gemini** for advice in a strict JSON schema (`responseJsonSchema`). The API key never reaches the browser.
+3. If the function or Gemini is unavailable, a **deterministic rules engine** in the browser produces the same response shape, so the app always works.
 
 ### Household profile used for tailoring
 
@@ -38,69 +39,52 @@ Browser ──► Express API ──► Open-Meteo (geocoding + air quality, no 
 Requires **Node.js 22+**.
 
 ```bash
-npm install
-cp .env.example .env        # add your GEMINI_API_KEY (free at https://aistudio.google.com/apikey)
-npm run dev                 # http://localhost:8080
-```
-
-The app runs without a key too; it uses the rules engine.
-
-## Tests
-
-```bash
+npm run dev     # serves docs/ at http://localhost:3000
 npm test
 ```
 
-The tests use Node's built-in test runner with mocked upstream APIs, so no network or API key is needed. They cover AQI banding, input validation, the air-quality client, the rules engine, prompt building, Gemini response parsing, and the HTTP API (errors, caching, fallback, security headers).
+The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. They cover AQI banding, input validation, the air-quality client, the rules engine, prompt building, and the Edge Function (CORS, origin checks, payload limits, sanitisation, Gemini errors).
 
-## API
+## Deploy
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/health` | Status, and whether AI is enabled |
-| `GET` | `/api/air?city=Delhi` or `?latitude=..&longitude=..` | Live air-quality report |
-| `POST` | `/api/advice` | `{ location: { city } \| { latitude, longitude }, profile: {...} }` → air report + advice |
-| `GET` | `/api/options` | Allowed profile values |
+**Frontend (GitHub Pages):** Settings → Pages → Deploy from branch `main`, folder `/docs`. If Pages is set to the root instead, the root `index.html` redirects to `docs/`.
+
+**AI backend (Supabase Edge Function):**
+
+1. In Supabase Dashboard → Edge Functions → Secrets, add `GEMINI_API_KEY` (free key at https://aistudio.google.com/apikey).
+2. Optional secrets: `GEMINI_MODEL` (default `gemini-3.5-flash-lite`) and `ALLOWED_ORIGINS` (comma-separated, default `https://pavithran-p12.github.io,http://localhost:3000`).
+3. Deploy: `supabase functions deploy air-advice --no-verify-jwt`.
+4. Set `ADVICE_FUNCTION_URL` in `docs/config.js` to your function URL.
 
 ## Security and quality
 
-- The API key stays on the server and is never sent to the browser.
+- The Gemini key is a Supabase secret and is never sent to the browser.
 - All input is validated and whitelisted; free text is stripped of markup and fenced in the prompt as untrusted, to resist prompt injection.
-- Helmet sets a strict Content Security Policy. The frontend renders with `textContent` only (no `innerHTML`), so model output can't inject HTML.
-- Requests are rate limited (30/min per IP), JSON bodies are capped at 10 KB, and upstream calls time out after 8 s.
-- A 10-minute in-memory cache avoids repeat upstream calls for the same place.
-- Errors return friendly JSON messages with no stack traces.
+- The Edge Function only accepts requests from allowed origins, caps bodies at 10 KB, and rebuilds the air report from plain numbers before prompting.
+- A strict Content Security Policy limits the page to its own scripts and three known APIs. The page renders with `textContent` only (no `innerHTML`), so model output can't inject HTML.
+- Network calls time out (8 s for air data, 20–25 s for AI), and errors show friendly messages.
 
 ## Accessibility
 
 Semantic HTML landmarks, labelled fields and fieldsets, a skip link, visible focus styles, results announced through `aria-live`, AQI shown as a number and a label (not colour alone), and support for dark mode and reduced motion.
 
-## Deploy (Google Cloud Run)
-
-```bash
-gcloud run deploy urban-air-quality-assistant \
-  --source . \
-  --region asia-south1 \
-  --allow-unauthenticated \
-  --set-env-vars GEMINI_API_KEY=YOUR_KEY
-```
-
-The included `Dockerfile` runs as a non-root user on `node:22-alpine` and listens on `$PORT` (default 8080).
-
 ## Project structure
 
 ```
-src/
-  server.js      entry point
-  app.js         Express app, routes, security, cache, error handling
-  airQuality.js  Open-Meteo geocoding + air quality client
-  aqi.js         AQI bands, WHO PM2.5 comparison, cleanest-hours finder
-  gemini.js      Gemini client + response validation
-  prompt.js      system instruction, prompt builder, JSON schema
-  rules.js       offline advice engine
-  validate.js    input validation and sanitisation
-public/          static frontend (HTML, CSS, vanilla JS)
-test/            unit and API tests
+docs/                      static site served by GitHub Pages
+  index.html, styles.css   UI
+  app.js                   UI logic
+  config.js                public config (function URL)
+  lib/
+    airQuality.js          Open-Meteo geocoding + air quality client
+    aqi.js                 AQI bands, WHO PM2.5 comparison, cleanest-hours finder
+    prompt.js              system instruction, prompt builder, JSON schema
+    rules.js               offline advice engine
+    validate.js            input validation and sanitisation
+supabase/functions/air-advice/
+  index.js                 Deno entry point
+  handler.js               request handling + Gemini call (reuses docs/lib modules)
+test/                      unit and Edge Function tests
 ```
 
 ## Disclaimer

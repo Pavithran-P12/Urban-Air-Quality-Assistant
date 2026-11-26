@@ -1,6 +1,29 @@
-'use strict';
+import { getAirReport } from './lib/airQuality.js';
+import { buildRuleAdvice } from './lib/rules.js';
+import { parseLocation, parseProfile } from './lib/validate.js';
+import { ADVICE_FUNCTION_URL, ADVICE_TIMEOUT_MS } from './config.js';
 
-(() => {
+/**
+ * Ask the Gemini-backed Edge Function for advice. Returns null on any failure so the
+ * caller can fall back to the built-in rules engine.
+ */
+async function fetchAiAdvice(report, profile) {
+  try {
+    const res = await fetch(ADVICE_FUNCTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ report, profile }),
+      signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.advice ?? null;
+  } catch {
+    return null;
+  }
+}
+
+{
   const $ = (id) => document.getElementById(id);
   const form = $('advice-form');
   const submit = $('submit');
@@ -118,30 +141,35 @@
       return;
     }
 
-    const body = {
-      location: coords ?? { city },
-      profile: {
+    let location;
+    let profile;
+    try {
+      location = parseLocation(coords ?? { city });
+      profile = parseProfile({
         household: [...form.querySelectorAll('input[name="household"]:checked')].map((i) => i.value),
         commute: $('commute').value,
         cooking: $('cooking').value,
         heating: $('heating').value,
         hasPurifier: $('hasPurifier').checked,
-        question: $('question').value.trim(),
-      },
-    };
+        question: $('question').value,
+      });
+    } catch (err) {
+      showError(err.message);
+      return;
+    }
 
     submit.disabled = true;
     submit.textContent = 'Checking the air…';
     results.setAttribute('aria-busy', 'true');
     try {
-      const res = await fetch('/api/advice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const report = await getAirReport(location);
+      submit.textContent = 'Building your plan…';
+      const aiAdvice = await fetchAiAdvice(report, profile);
+      render({
+        ...report,
+        advice: aiAdvice ?? buildRuleAdvice(report, profile),
+        source: aiAdvice ? 'gemini' : 'rules',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Something went wrong.');
-      render(data);
     } catch (err) {
       showError(err.message || 'Could not reach the server. Please try again.');
     } finally {
@@ -150,4 +178,4 @@
       results.setAttribute('aria-busy', 'false');
     }
   });
-})();
+}

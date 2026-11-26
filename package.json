@@ -3,20 +3,12 @@
   "version": "1.0.0",
   "description": "GenAI assistant that turns live air-quality data into low-emission routines, indoor air hacks and sustainable swaps.",
   "type": "module",
-  "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "dev": "npx --yes serve@latest docs",
     "test": "node --test"
   },
   "engines": {
     "node": ">=22"
   },
-  "license": "MIT",
-  "dependencies": {
-    "@google/genai": "^3.6.1",
-    "express": "^5.3.0",
-    "express-rate-limit": "^8.7.5",
-    "helmet": "^8.3.0"
-  }
+  "license": "MIT"
 }

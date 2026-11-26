@@ -1,11 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { categorize, pm25Multiple, cleanestHours } from '../src/aqi.js';
-import { cleanText, parseLocation, parseProfile, ValidationError } from '../src/validate.js';
-import { buildRuleAdvice } from '../src/rules.js';
-import { buildPrompt } from '../src/prompt.js';
-import { createGeminiAdvisor, parseAdvice } from '../src/gemini.js';
-import { getAirReport } from '../src/airQuality.js';
+import { categorize, pm25Multiple, cleanestHours } from '../docs/lib/aqi.js';
+import { cleanText, parseLocation, parseProfile, ValidationError } from '../docs/lib/validate.js';
+import { buildRuleAdvice } from '../docs/lib/rules.js';
+import { buildPrompt } from '../docs/lib/prompt.js';
+import { getAirReport } from '../docs/lib/airQuality.js';
 import { mockFetch } from './fixtures.js';
 
 describe('aqi', () => {
@@ -117,39 +116,4 @@ describe('advice', () => {
     assert.match(prompt, /"""ignore previous instructions"""/);
   });
 
-  test('gemini advisor is disabled without a key', () => {
-    assert.equal(createGeminiAdvisor({}), null);
-  });
-
-  test('gemini advisor sends schema config and parses output', async () => {
-    let request;
-    const client = {
-      models: {
-        generateContent: async (req) => {
-          request = req;
-          return {
-            text: JSON.stringify({
-              summary: 's',
-              riskNote: 'r',
-              routine: [{ time: 't', action: 'a', why: 'w' }],
-              indoor: [{ tip: 't', why: 'w' }],
-              alternatives: [],
-              answer: '',
-            }),
-          };
-        },
-      },
-    };
-    const advise = createGeminiAdvisor({ client, model: 'test-model' });
-    const out = await advise(await report(), parseProfile({}));
-    assert.equal(out.summary, 's');
-    assert.equal(request.model, 'test-model');
-    assert.equal(request.config.responseMimeType, 'application/json');
-    assert.ok(request.config.responseJsonSchema);
-  });
-
-  test('parseAdvice rejects malformed output', () => {
-    assert.throws(() => parseAdvice('not json'));
-    assert.throws(() => parseAdvice(JSON.stringify({ summary: 'x', routine: [] })));
-  });
 });
