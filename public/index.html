@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AI assistant that turns live air-quality data into low-emission routines, indoor air hacks and sustainable swaps for your family.">
+  <title>Urban Air Quality Assistant</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <h1>Urban Air Quality Assistant</h1>
+    <p>Live air quality plus a plan for your household: when to go out, how to keep indoor air clean, and which swaps cut pollution.</p>
+  </header>
+
+  <main id="main">
+    <form id="advice-form" class="card" novalidate>
+      <h2>Tell us about your day</h2>
+
+      <div class="field">
+        <label for="city">City</label>
+        <div class="row">
+          <input id="city" name="city" type="text" autocomplete="address-level2" placeholder="e.g. Delhi" maxlength="80" required aria-describedby="city-help">
+          <button type="button" id="locate" class="secondary">Use my location</button>
+        </div>
+        <p id="city-help" class="help">Type a city or share your location.</p>
+      </div>
+
+      <fieldset class="field">
+        <legend>Who lives with you? <span class="help">(choose any)</span></legend>
+        <div class="chips">
+          <label><input type="checkbox" name="household" value="children"> Children</label>
+          <label><input type="checkbox" name="household" value="elderly"> Elderly</label>
+          <label><input type="checkbox" name="household" value="pregnant"> Pregnant</label>
+          <label><input type="checkbox" name="household" value="asthma-or-copd"> Asthma / COPD</label>
+          <label><input type="checkbox" name="household" value="heart-condition"> Heart condition</label>
+          <label><input type="checkbox" name="household" value="pets"> Pets</label>
+        </div>
+      </fieldset>
+
+      <div class="grid">
+        <div class="field">
+          <label for="commute">Main commute</label>
+          <select id="commute" name="commute">
+            <option value="public-transport">Public transport</option>
+            <option value="car">Car</option>
+            <option value="two-wheeler">Two-wheeler</option>
+            <option value="walk">Walk</option>
+            <option value="cycle">Cycle</option>
+            <option value="work-from-home">Work from home</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="cooking">Cooking fuel</label>
+          <select id="cooking" name="cooking">
+            <option value="lpg">LPG</option>
+            <option value="piped-gas">Piped gas</option>
+            <option value="induction">Induction</option>
+            <option value="electric">Electric</option>
+            <option value="biomass">Wood / biomass</option>
+            <option value="kerosene">Kerosene</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="heating">Heating</label>
+          <select id="heating" name="heating">
+            <option value="none">None</option>
+            <option value="electric">Electric heater</option>
+            <option value="gas">Gas heater</option>
+            <option value="wood">Wood</option>
+            <option value="coal">Coal</option>
+            <option value="kerosene">Kerosene</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="inline"><input type="checkbox" id="hasPurifier" name="hasPurifier"> I have an air purifier</label>
+      </div>
+
+      <div class="field">
+        <label for="question">Anything specific? <span class="help">(optional)</span></label>
+        <textarea id="question" name="question" rows="2" maxlength="300" placeholder="e.g. Is it safe for my kids to play outside after school?"></textarea>
+      </div>
+
+      <button type="submit" id="submit">Get my plan</button>
+      <p id="form-error" class="error" role="alert" hidden></p>
+    </form>
+
+    <section id="results" aria-live="polite" aria-busy="false" hidden>
+      <div id="aqi-card" class="card aqi">
+        <p class="aqi-place" id="aqi-place"></p>
+        <p class="aqi-value"><span id="aqi-number"></span> <span class="aqi-unit">US AQI</span></p>
+        <p class="aqi-label" id="aqi-label"></p>
+        <dl class="pollutants" id="pollutants"></dl>
+        <p class="help" id="aqi-best"></p>
+      </div>
+
+      <div class="card">
+        <h2>Today in brief</h2>
+        <p id="summary"></p>
+        <p id="risk" class="risk"></p>
+        <div id="answer-block" hidden>
+          <h3>Your question</h3>
+          <p id="answer"></p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Low-emission daily routine</h2>
+        <ol id="routine" class="items"></ol>
+      </div>
+
+      <div class="card">
+        <h2>Indoor air hacks</h2>
+        <ul id="indoor" class="items"></ul>
+      </div>
+
+      <div class="card">
+        <h2>Sustainable swaps and their impact</h2>
+        <ul id="alternatives" class="items"></ul>
+      </div>
+
+      <p class="help source" id="source"></p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Air data: <a href="https://open-meteo.com/en/docs/air-quality-api" rel="noopener">Open-Meteo Air Quality API</a> (CAMS). Advice is general guidance, not medical advice.</p>
+  </footer>
+</body>
+</html>
