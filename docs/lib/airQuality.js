@@ -1,4 +1,6 @@
 import { categorize, cleanestHours, dominantPollutant, outlook, pm25Multiple, pm25ToUsAqi } from './aqi.js';
+import { SOURCES, fromGoogle } from './normalise.js';
+import { fetchWeather, summariseWeather } from './weather.js';
 
 const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 const AIR_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
@@ -117,12 +119,17 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
   };
 
   const hours = cleanestHours(hourly);
+  const forecast = hourly.time
+    .slice(0, 48)
+    .map((time, i) => ({ time, aqi: hourly.us_aqi[i] }))
+    .filter((h) => typeof h.aqi === 'number');
   const subIndices = Object.fromEntries(Object.entries(SUB_INDEX_FIELDS).map(([key, field]) => [key, c[field]]));
 
   return {
     time: c.time,
     usAqi,
     aqiEstimated,
+    aqiMethod: aqiEstimated ? 'US AQI from PM2.5 (EPA formula)' : 'US AQI from CAMS',
     category: categorize(usAqi),
     pollutants: {
       pm2_5: c.pm2_5,
@@ -133,23 +140,59 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
     },
     pm25WhoMultiple: pm25Multiple(c.pm2_5),
     dominant: dominantPollutant(subIndices),
+    localIndex: null,
+    forecast,
     cleanestHours: hours,
     outlook: outlook(usAqi, hours),
+    source: { ...SOURCES['open-meteo'], updated: c.time },
   };
 }
 
 /**
+ * Ask the air-data Edge Function (Google Air Quality API, 500 m) for a location.
+ * Returns null on any failure so the caller can fall back to Open-Meteo.
+ * @param {string|undefined} url
+ */
+export async function fetchGoogleAir(url, latitude, longitude, fetchImpl = fetch) {
+  if (!url) return null;
+  try {
+    const res = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ latitude, longitude }),
+      signal: AbortSignal.timeout(TIMEOUT_MS + 4000),
+    });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Get air quality by city name or coordinates.
+ * Source order: Google Air Quality (500 m, via our Edge Function) → CAMS via Open-Meteo (~45 km).
+ * Weather is fetched in parallel and is optional.
  * @param {{city?:string, latitude?:number, longitude?:number}} loc
  * @param {typeof fetch} [fetchImpl]
+ * @param {{airDataUrl?:string}} [options]
  */
-export async function getAirReport(loc, fetchImpl = fetch) {
+export async function getAirReport(loc, fetchImpl = fetch, { airDataUrl } = {}) {
   let place;
   if (typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
-    place = { name: 'Your location', latitude: loc.latitude, longitude: loc.longitude };
+    place = { name: 'Your location', latitude: loc.latitude, longitude: loc.longitude, timezone: null };
   } else {
     place = await geocode(loc.city, fetchImpl);
   }
-  const air = await fetchAirQuality(place.latitude, place.longitude, fetchImpl);
-  return { place, air };
+
+  const [google, weather] = await Promise.all([
+    fetchGoogleAir(airDataUrl, place.latitude, place.longitude, fetchImpl),
+    fetchWeather(place.latitude, place.longitude, fetchImpl),
+  ]);
+  const tz = { offsetSeconds: weather?.offsetSeconds ?? null, timeZone: weather?.timeZone ?? place.timezone ?? null };
+
+  let air = google ? fromGoogle(google, tz) : null;
+  if (!air) air = await fetchAirQuality(place.latitude, place.longitude, fetchImpl);
+
+  const bestHour = air.cleanestHours.find((h) => h.aqi === air.outlook.bestAqi);
+  return { place, air, weather: summariseWeather(weather, bestHour, air.time), weatherHours: weather?.hourly ?? [] };
 }

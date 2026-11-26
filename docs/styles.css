@@ -399,3 +399,39 @@ textarea:focus { outline: none; border-color: var(--color-ring); box-shadow: 0 0
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* ---------- Data source badges ---------- */
+.badges { display: flex; flex-wrap: wrap; gap: var(--space-2); list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.badge-chip {
+  font-size: .78rem; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--color-border); background: var(--color-subtle); color: var(--color-fg);
+}
+.chip-modelled { border-color: color-mix(in srgb, var(--color-accent) 60%, transparent); background: color-mix(in srgb, var(--color-accent) 14%, var(--color-card)); }
+.chip-measured { border-color: color-mix(in srgb, var(--aqi-good) 60%, transparent); background: color-mix(in srgb, var(--aqi-good) 12%, var(--color-card)); }
+.aqi-local { margin: var(--space-1) 0 0; font-size: .88rem; color: var(--color-muted); }
+.weather-line { margin: var(--space-3) 0 0; font-size: .9rem; }
+.data-note { margin: var(--space-2) 0 0; font-size: .82rem; color: var(--color-muted); }
+
+/* ---------- Forecast chart ---------- */
+.chart-legend { margin: 0 0 var(--space-3); color: var(--color-muted); font-size: .9rem; }
+.chart-svg { display: block; width: 100%; height: auto; }
+.chart-grid line { stroke: var(--color-border); stroke-width: 1; }
+.chart-grid text, .tick-label, .tick-day { fill: var(--color-muted); font-size: 11px; }
+.tick-day { font-weight: 700; }
+.tick { stroke: var(--color-border); }
+.bar-good { fill: var(--aqi-good); }
+.bar-moderate { fill: var(--aqi-moderate); }
+.bar-sensitive { fill: var(--aqi-sensitive); }
+.bar-unhealthy { fill: var(--aqi-unhealthy); }
+.bar-very-unhealthy { fill: var(--aqi-very); }
+.bar-hazardous { fill: var(--aqi-hazard); }
+.bar-unknown { fill: var(--color-muted); }
+.bar-best { stroke: var(--color-fg); stroke-width: 2; }
+.chart-table { margin-top: var(--space-3); }
+.chart-table summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; color: var(--color-primary); }
+.table-scroll { max-height: 320px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.chart-table table { width: 100%; border-collapse: collapse; font-size: .88rem; font-variant-numeric: tabular-nums; }
+.chart-table th, .chart-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--color-border); }
+.chart-table thead th { position: sticky; top: 0; background: var(--color-card); }
+.chart-table .row-best td { font-weight: 700; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

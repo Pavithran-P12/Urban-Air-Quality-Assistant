@@ -2,7 +2,8 @@
 
 A GenAI-powered assistant that helps families and communities get through severe winter smog and urban air pollution. Enter your city and a few details about your household, and it gives you:
 
-- **Live air quality**: US AQI, PM2.5, PM10, NO₂, O₃ and CO, plus the cleanest hours in the next 24 hours.
+- **Hyperlocal air quality**: US AQI, PM2.5, PM10, NO₂, O₃ and CO from the Google Air Quality API (500 m grid), plus the country's own index (e.g. India's NAQI), with honest "modelled" labels.
+- **48-hour forecast chart** with the cleanest hours highlighted and weather context (wind, rain).
 - **A low-emission daily routine**: when to go out, exercise, commute and ventilate.
 - **Indoor air quality hacks**: low-cost steps such as DIY box-fan filters, damp mopping and kitchen exhaust use.
 - **Sustainable swaps**: alternatives to your current commute, cooking fuel and heating, each with a plain-language explanation of its impact.
@@ -12,16 +13,26 @@ Every recommendation explains *why* it helps, so people understand the direct ef
 ## How it works
 
 ```
-Browser (GitHub Pages) ──► Open-Meteo (geocoding + air quality, no key needed)
-        │
-        ├──► Supabase Edge Function "air-advice" ──► Gemini (structured JSON output)
-        │         (holds GEMINI_API_KEY as a secret)
-        └──► Built-in rules engine (fallback if AI is unavailable)
+Browser (GitHub Pages)
+  ├─► Open-Meteo geocoding ─────────────────────────────┐
+  ├─► Supabase Edge Function "air-data" ─► Google Air Quality API (500 m, 48 h)
+  │        (GOOGLE_AQ_API_KEY secret, 15-min cache per 500 m cell)
+  ├─► Open-Meteo weather (wind, rain) and, only if Google fails, CAMS air (~45 km)
+  ├─► Supabase Edge Function "air-advice" ─► Gemini (structured JSON output)
+  │        (GEMINI_API_KEY secret, fact-checked, 1 retry)
+  └─► Built-in rules engine (fallback if AI is unavailable)
 ```
 
-1. The browser geocodes the city and fetches current plus hourly air quality from the [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api) (Copernicus CAMS data).
-2. It sends the readings and the household profile to a **Supabase Edge Function**. The function re-validates everything, then asks **Google Gemini** for advice in a strict JSON schema (`responseJsonSchema`). The API key never reaches the browser.
-3. If the function or Gemini is unavailable, a **deterministic rules engine** in the browser produces the same response shape, so the app always works.
+1. The browser geocodes the city, then asks the **air-data** function for Google Air Quality data (current conditions + 48 hourly forecasts) and Open-Meteo for weather, in parallel. If Google is unavailable, it falls back to the CAMS model via Open-Meteo.
+2. Every provider is normalised into one shape (`docs/lib/normalise.js`): concentrations in µg/m³ (ppb converted with the 25 °C molar volume), local times, and a **source label** saying what the data is (always *modelled*), where it comes from and its grid size.
+3. US AQI is computed in code from PM2.5 with the EPA 2024 breakpoints, because Google does not document US AQI for every country; the country's own index is shown alongside it.
+4. The readings, weather and household profile go to the **air-advice** function, which re-validates everything and asks **Google Gemini** for advice in a strict JSON schema. If Gemini is unavailable, the browser's **rules engine** produces the same shape.
+
+### Data honesty
+
+- Every reading is labelled **Modelled**, with its source and grid size ("Google Air Quality API · 500 m grid", or "CAMS via Open-Meteo · ~45 km grid"). Nothing is presented as a sensor measurement.
+- A plain-language note explains what the grid size means ("nearby streets can differ" / "treat it as a city-wide guide").
+- The server re-derives the source label itself, so the model is never told the data is "measured", and the prompt forbids calling it that.
 
 ### Accuracy and edge cases
 
@@ -52,18 +63,18 @@ npm run dev     # serves docs/ at http://localhost:3000
 npm test
 ```
 
-The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. There are 48 tests covering AQI banding and PM2.5 conversion, input validation, city disambiguation, missing-data fallbacks, the rules engine across AQI levels, prompt grounding, the fact-checking of model output, and the Edge Function (CORS, origin checks, payload limits, sanitisation, retries and rate limiting).
+The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. `npm run check` runs ESLint and the tests; GitHub Actions runs both on every push. There are 66 tests covering AQI banding and PM2.5 conversion, input validation, city disambiguation, missing-data fallbacks, the rules engine across AQI levels, prompt grounding, the fact-checking of model output, and both Edge Functions (CORS, origin checks, payload limits, sanitisation, caching, retries and rate limiting), unit conversion, time zones and source fallback.
 
 ## Deploy
 
 **Frontend (GitHub Pages):** Settings → Pages → Deploy from branch `main`, folder `/docs`. If Pages is set to the root instead, the root `index.html` redirects to `docs/`.
 
-**AI backend (Supabase Edge Function):**
+**Backend (two Supabase Edge Functions):**
 
-1. In Supabase Dashboard → Edge Functions → Secrets, add `GEMINI_API_KEY` (free key at https://aistudio.google.com/apikey).
+1. In Supabase Dashboard → Edge Functions → Secrets, add `GEMINI_API_KEY` (free key at https://aistudio.google.com/apikey) and `GOOGLE_AQ_API_KEY` (a Google Cloud key restricted to the Air Quality API; billing must be enabled, 10,000 calls/month are free).
 2. Optional secrets: `GEMINI_MODEL` (default `gemini-3.5-flash-lite`) and `ALLOWED_ORIGINS` (comma-separated, default `https://pavithran-p12.github.io,http://localhost:3000`).
-3. Deploy: `supabase functions deploy air-advice --no-verify-jwt`.
-4. Set `ADVICE_FUNCTION_URL` in `docs/config.js` to your function URL.
+3. Deploy: `supabase functions deploy air-advice --no-verify-jwt` and `supabase functions deploy air-data --no-verify-jwt`.
+4. Set `ADVICE_FUNCTION_URL` and `AIR_DATA_FUNCTION_URL` in `docs/config.js` to your function URLs.
 
 ## Security and quality
 
@@ -71,7 +82,10 @@ The tests use Node's built-in test runner with mocked APIs, so no network or API
 - All input is validated and whitelisted; free text is stripped of markup and fenced in the prompt as untrusted, to resist prompt injection.
 - The Edge Function only accepts requests from allowed origins, rate-limits bursts per IP (10/min), caps bodies at 10 KB, and rebuilds the air report from plain numbers (re-deriving band, outlook and main pollutant) before prompting.
 - A strict Content Security Policy limits the page to its own scripts and three known APIs. The page renders with `textContent` only (no `innerHTML`), so model output can't inject HTML.
-- Network calls time out (8 s for air data, 20–25 s for AI), and errors show friendly messages.
+- Network calls time out (6–12 s for data, 20–25 s for AI), and errors show friendly messages.
+- Caching: the air-data function caches each ~500 m cell for 15 minutes, and the browser reuses a place's result for 10 minutes, so repeat lookups cost no API calls.
+- Keys travel in headers (`X-Goog-Api-Key`, `x-goog-api-key`), never in URLs, so they don't end up in logs.
+- Edge functions log one JSON line per request (cell, duration, error) for debugging.
 
 ## Accessibility
 
@@ -80,21 +94,26 @@ Semantic HTML landmarks, labelled fields and fieldsets, a skip link, visible foc
 ## Project structure
 
 ```
-docs/                      static site served by GitHub Pages
-  index.html, styles.css   UI
-  app.js                   UI logic
-  config.js                public config (function URL)
+docs/                        static site served by GitHub Pages
+  index.html, styles.css     UI
+  app.js                     UI logic and caching
+  chart.js                   accessible 48 h forecast chart (SVG + table)
+  config.js                  public config (function URLs, cache time)
   lib/
-    airQuality.js          Open-Meteo geocoding + air quality client
-    aqi.js                 AQI bands, PM2.5→AQI, main pollutant, cleanest hours, safety guidance
-    advice.js              cleans and fact-checks advice before display
-    prompt.js              system instruction, prompt builder, JSON schema
-    rules.js               offline advice engine
-    validate.js            input validation and sanitisation
-supabase/functions/air-advice/
-  index.js                 Deno entry point
-  handler.js               request handling + Gemini call (reuses docs/lib modules)
-test/                      unit and Edge Function tests
+    airQuality.js            geocoding, source selection, Open-Meteo fallback
+    normalise.js             provider data → one shape (units, time zones, source labels)
+    weather.js               Open-Meteo weather (wind, rain)
+    aqi.js                   AQI bands, PM2.5→AQI, main pollutant, cleanest hours, safety guidance
+    prompt.js                system instruction, prompt builder, JSON schema
+    advice.js                cleans and fact-checks advice before display
+    rules.js                 offline advice engine
+    validate.js              input validation and sanitisation
+supabase/functions/
+  _shared/http.js            CORS, rate limiter, TTL cache, JSON body reader
+  air-data/                  Google Air Quality API proxy (cached)
+  air-advice/                Gemini advice (reuses docs/lib modules)
+test/                        unit, data and Edge Function tests
+.github/workflows/ci.yml     lint + tests on every push
 ```
 
 ## Disclaimer

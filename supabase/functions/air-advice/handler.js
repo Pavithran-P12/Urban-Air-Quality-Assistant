@@ -4,9 +4,12 @@
  * unit-tested in Node and served by Deno on Supabase.
  */
 import { ADVICE_SCHEMA, SYSTEM_INSTRUCTION, buildPrompt } from '../../../docs/lib/prompt.js';
-import { categorize, dominantPollutant, outlook } from '../../../docs/lib/aqi.js';
+import * as aqi from '../../../docs/lib/aqi.js';
 import { parseProfile, sanitizeReport } from '../../../docs/lib/validate.js';
 import { AdviceError, normaliseAdvice } from '../../../docs/lib/advice.js';
+import { clientIp, corsFor, createRateLimiter, readJson } from '../_shared/http.js';
+
+export { createRateLimiter };
 
 export const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -20,25 +23,6 @@ class GeminiError extends Error {
     this.name = 'GeminiError';
     this.retryable = retryable;
   }
-}
-
-/**
- * Fixed-window, in-memory rate limiter keyed by client IP. Edge instances are short-lived, so this
- * is a best-effort guard against bursts, not a hard quota.
- */
-export function createRateLimiter({ limit = 10, windowMs = 60_000, now = Date.now } = {}) {
-  const hits = new Map();
-  return function allow(key) {
-    const t = now();
-    const entry = hits.get(key);
-    if (!entry || t - entry.start >= windowMs) {
-      if (hits.size > 5000) hits.clear();
-      hits.set(key, { start: t, count: 1 });
-      return true;
-    }
-    entry.count += 1;
-    return entry.count <= limit;
-  };
 }
 
 /** One Gemini call with a strict JSON response schema. Low temperature for factual consistency. */
@@ -105,38 +89,19 @@ export function createHandler({
   retryDelayMs,
 }) {
   return async function handle(req) {
-    const origin = req.headers.get('origin') ?? '';
-    const allowed = allowedOrigins.includes(origin);
-    const cors = {
-      'Access-Control-Allow-Origin': allowed ? origin : allowedOrigins[0],
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'content-type',
-      'Access-Control-Max-Age': '86400',
-      Vary: 'Origin',
-    };
-    const json = (status, body, extra = {}) =>
-      new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', ...extra } });
-
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    const { allowed, headers, json } = corsFor(req, allowedOrigins);
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers });
     if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
     if (!allowed) return json(403, { error: 'Origin not allowed' });
     if (!apiKey) return json(503, { error: 'AI is not configured' });
+    if (!rateLimiter(clientIp(req))) return json(429, { error: 'Too many requests. Please wait a minute.' }, { 'Retry-After': '60' });
 
-    const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unknown';
-    if (!rateLimiter(ip)) return json(429, { error: 'Too many requests. Please wait a minute.' }, { 'Retry-After': '60' });
-
-    let body;
-    try {
-      const raw = await req.text();
-      if (raw.length > MAX_BODY_BYTES) return json(413, { error: 'Request too large' });
-      body = JSON.parse(raw);
-    } catch {
-      return json(400, { error: 'Invalid JSON' });
-    }
+    const { body, error } = await readJson(req, MAX_BODY_BYTES);
+    if (error) return json(error.status, { error: error.message });
 
     let report;
     try {
-      report = sanitizeReport(body?.report, { categorize, outlook, dominantPollutant });
+      report = sanitizeReport(body?.report, aqi);
     } catch (err) {
       return json(400, { error: err.message });
     }

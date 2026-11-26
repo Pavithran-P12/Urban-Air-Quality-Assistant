@@ -137,7 +137,8 @@ describe('air quality client', () => {
     assert.equal(air.cleanestHours.length, 3);
     assert.equal(air.cleanestHours[0].aqi, 120);
     assert.equal(air.outlook.improves, true);
-    assert.equal(fetchImpl.calls.length, 2);
+    assert.equal(air.source.provider, 'open-meteo');
+    assert.equal(fetchImpl.calls.length, 3, 'geocode + weather + air (no air-data URL configured)');
   });
 
   test('estimates AQI from PM2.5 when the upstream AQI is missing', async () => {
@@ -185,8 +186,8 @@ describe('air quality client', () => {
   test('skips geocoding when coordinates are given', async () => {
     const fetchImpl = mockFetch();
     await getAirReport({ latitude: 1, longitude: 2 }, fetchImpl);
-    assert.equal(fetchImpl.calls.length, 1);
-    assert.match(fetchImpl.calls[0], /air-quality/);
+    assert.ok(fetchImpl.calls.every((u) => !u.includes('geocoding')));
+    assert.ok(fetchImpl.calls.some((u) => u.includes('air-quality')));
   });
 
   test('unknown city gives a friendly 404', async () => {

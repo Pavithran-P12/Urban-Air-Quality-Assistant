@@ -6,12 +6,12 @@
   <meta name="description" content="Live air quality plus a personal plan for your household: low-emission routines, indoor air hacks and greener swaps, explained.">
   <meta name="theme-color" content="#f0f9ff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://geocoding-api.open-meteo.com https://air-quality-api.open-meteo.com https://wxlpbefrbxxbosjfeudk.supabase.co; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://geocoding-api.open-meteo.com https://air-quality-api.open-meteo.com https://api.open-meteo.com https://wxlpbefrbxxbosjfeudk.supabase.co; base-uri 'self'; form-action 'self'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>Urban Air Quality Assistant</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230369a1' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M3 8h11a3 3 0 1 0-3-3M3 12h16a3 3 0 1 1-3 3M3 16h8'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="styles.css?v=3">
-  <script type="module" src="app.js?v=3"></script>
+  <link rel="stylesheet" href="styles.css?v=4">
+  <script type="module" src="app.js?v=4"></script>
 </head>
 <body>
   <!-- Icon sprite (decorative; every use is aria-hidden) -->
@@ -38,7 +38,7 @@
         <svg class="icon brand-icon" aria-hidden="true"><use href="#i-wind"/></svg>
         <span>Urban Air</span>
       </span>
-      <span class="topbar-note">Live data · AI guidance</span>
+      <span class="topbar-note">Forecast data · AI guidance</span>
     </div>
   </header>
 
@@ -160,12 +160,14 @@
           <p class="aqi-place"><svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg><span id="aqi-place"></span></p>
           <p class="aqi-time" id="aqi-time"></p>
         </div>
+        <ul class="badges" id="source-badges" aria-label="About this data"></ul>
         <div class="aqi-main">
           <p class="aqi-value"><span id="aqi-number"></span><span class="aqi-unit">US AQI</span></p>
           <div>
             <p class="aqi-badge" id="aqi-label"></p>
             <p class="aqi-msg" id="aqi-msg"></p>
             <p class="aqi-main-pollutant" id="aqi-dominant" hidden></p>
+            <p class="aqi-local" id="aqi-local" hidden></p>
           </div>
         </div>
         <div class="gauge" role="img" id="gauge" aria-label="">
@@ -179,6 +181,24 @@
           <ul class="hours-list" id="hours"></ul>
           <p class="hours-note" id="hours-note"></p>
         </div>
+        <p class="weather-line" id="weather-line" hidden></p>
+        <p class="data-note" id="data-note"></p>
+      </article>
+
+      <article class="card" id="forecast-card">
+        <h2 class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>Next 48 hours</h2>
+        <p class="chart-legend">Each bar is one hour of forecast AQI. Outlined bars are the cleanest hours ahead.</p>
+        <div class="chart" id="forecast-chart"></div>
+        <details class="chart-table">
+          <summary>Show hourly values</summary>
+          <div class="table-scroll">
+            <table>
+              <caption class="sr-only">Hourly AQI forecast</caption>
+              <thead><tr><th scope="col">Time</th><th scope="col">AQI</th><th scope="col">Level</th><th scope="col">Wind</th></tr></thead>
+              <tbody id="forecast-rows"></tbody>
+            </table>
+          </div>
+        </details>
       </article>
 
       <article class="card">
@@ -219,7 +239,8 @@
 
   <footer class="footer">
     <div class="wrap">
-      <p>Air data from <a href="https://open-meteo.com/en/docs/air-quality-api" rel="noopener">Open-Meteo</a> (Copernicus CAMS). AI guidance by Google Gemini.</p>
+      <p>Air data from the <a href="https://developers.google.com/maps/documentation/air-quality/overview" rel="noopener">Google Air Quality API</a>, with <a href="https://open-meteo.com/en/docs/air-quality-api" rel="noopener">Open-Meteo</a> (Copernicus CAMS) as a fallback. Weather by Open-Meteo. AI guidance by Google Gemini.</p>
+      <p>All readings are model estimates for a grid cell, not measurements from a sensor at your address.</p>
       <p>General guidance, not medical advice. If anyone struggles to breathe, see a doctor.</p>
     </div>
   </footer>

@@ -2,7 +2,8 @@ import { getAirReport } from './lib/airQuality.js';
 import { buildRuleAdvice } from './lib/rules.js';
 import { parseLocation, parseProfile } from './lib/validate.js';
 import { normaliseAdvice } from './lib/advice.js';
-import { ADVICE_FUNCTION_URL, ADVICE_TIMEOUT_MS } from './config.js';
+import { ADVICE_FUNCTION_URL, ADVICE_TIMEOUT_MS, AIR_DATA_FUNCTION_URL, REPORT_CACHE_MS } from './config.js';
+import { renderForecastChart } from './chart.js';
 
 /** Short, plain-language health message per AQI band. */
 const BAND_MESSAGE = {
@@ -73,7 +74,7 @@ async function fetchAiAdvice(report, profile) {
     const res = await fetch(ADVICE_FUNCTION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ report, profile }),
+      body: JSON.stringify({ report: { place: report.place, air: { ...report.air, forecast: undefined }, weather: report.weather }, profile }),
       signal: AbortSignal.timeout(ADVICE_TIMEOUT_MS),
     });
     if (!res.ok) return null;
@@ -86,7 +87,47 @@ async function fetchAiAdvice(report, profile) {
 
 /* ---------- Rendering ---------- */
 
-function renderAir({ place, air }) {
+function badge(text, className = '') {
+  const li = el('li', `badge-chip ${className}`.trim(), text);
+  return li;
+}
+
+function renderSource(air) {
+  const s = air.source;
+  $('source-badges').replaceChildren(
+    badge(s.kind === 'measured' ? 'Measured' : 'Modelled', s.kind === 'measured' ? 'chip-measured' : 'chip-modelled'),
+    badge(`${s.label} · ${s.resolution}`),
+    ...(air.aqiEstimated ? [badge(air.aqiMethod)] : []),
+  );
+  const local = $('aqi-local');
+  local.hidden = !air.localIndex;
+  if (air.localIndex) local.textContent = `Local index ${air.localIndex.name}: ${air.localIndex.aqi}, ${air.localIndex.category}`;
+  $('data-note').textContent =
+    s.provider === 'google'
+      ? 'Estimated for a 500 m grid cell around this location. Nearby streets can differ, especially next to busy roads.'
+      : 'Estimated for a grid cell about 45 km wide, so neighbourhoods within a city all show similar values. Treat it as a city-wide guide.';
+}
+
+function renderWeather(w, best) {
+  const line = $('weather-line');
+  const parts = [];
+  if (typeof w?.temperature === 'number') parts.push(`${Math.round(w.temperature)}°C`);
+  if (typeof w?.wind === 'number') parts.push(`wind ${Math.round(w.wind)} km/h now`);
+  if (typeof w?.windAtBest === 'number' && best) parts.push(`${Math.round(w.windAtBest)} km/h around ${hourLabel(best.time)}`);
+  if (typeof w?.rainChanceMax24 === 'number' && w.rainChanceMax24 >= 20) parts.push(`up to ${w.rainChanceMax24}% chance of rain`);
+  line.hidden = parts.length === 0;
+  line.textContent = parts.length ? `Weather: ${parts.join(' · ')}. Wind and rain help clear smog.` : '';
+}
+
+/** Last chart inputs, so the chart can be drawn once its card is visible (and redrawn on resize). */
+let lastChart = null;
+function drawChart() {
+  if (!lastChart) return;
+  const ok = renderForecastChart($('forecast-chart'), $('forecast-rows'), lastChart.forecast, lastChart.best, lastChart.weatherHours);
+  $('forecast-card').hidden = !ok;
+}
+
+function renderAir({ place, air, weather, weatherHours }) {
   const level = air.category.level;
   const card = $('aqi-card');
   card.style.setProperty('--aqi', `var(${BAND_VAR[level] ?? '--color-primary'})`);
@@ -95,13 +136,8 @@ function renderAir({ place, air }) {
   $('aqi-time').textContent = air.time ? `Updated ${hourLabel(air.time)} local time` : '';
   $('aqi-number').textContent = air.usAqi;
   const dominant = $('aqi-dominant');
-  dominant.hidden = !air.dominant && !air.aqiEstimated;
-  dominant.textContent = [
-    air.dominant ? `Main pollutant: ${air.dominant.name}` : '',
-    air.aqiEstimated ? 'AQI estimated from PM2.5' : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  dominant.hidden = !air.dominant;
+  dominant.textContent = air.dominant ? `Main pollutant: ${air.dominant.name}` : '';
   $('aqi-label').textContent = air.category.label;
   $('aqi-msg').textContent = BAND_MESSAGE[level] ?? '';
 
@@ -128,6 +164,10 @@ function renderAir({ place, air }) {
       return li;
     }),
   );
+  renderSource(air);
+  const best = air.cleanestHours.find((h) => h.aqi === air.outlook?.bestAqi);
+  renderWeather(weather, best);
+  lastChart = { forecast: air.forecast ?? [], best: air.cleanestHours, weatherHours };
   const o = air.outlook;
   $('hours-note').textContent = o?.improves
     ? `About ${o.drop} points cleaner than now. Plan errands and airing out for then.`
@@ -189,6 +229,17 @@ function init() {
   const personalise = form.querySelector('.personalise');
   let coords = null;
   let busy = false;
+  const reportCache = new Map();
+
+  /** Look up a place, reusing a recent result for the same place in this tab. */
+  async function loadReport(location) {
+    const key = location.city ? `c:${location.city.toLowerCase()}` : `g:${location.latitude.toFixed(3)},${location.longitude.toFixed(3)}`;
+    const hit = reportCache.get(key);
+    if (hit && Date.now() - hit.at < REPORT_CACHE_MS) return hit.report;
+    const report = await getAirReport(location, fetch, { airDataUrl: AIR_DATA_FUNCTION_URL });
+    reportCache.set(key, { at: Date.now(), report });
+    return report;
+  }
 
   // Collapse the optional section on small screens so the search is the first thing people see.
   if (window.matchMedia('(max-width: 480px)').matches) personalise.open = false;
@@ -247,7 +298,7 @@ function init() {
     skeleton.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     try {
-      const report = await getAirReport(location);
+      const report = await loadReport(location);
       renderAir(report);
       setBusy(true, 'Building your plan…');
       const aiAdvice = await fetchAiAdvice(report, profile);
@@ -255,6 +306,7 @@ function init() {
 
       skeleton.hidden = true;
       results.hidden = false;
+      drawChart();
       results.focus({ preventScroll: true });
       results.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
@@ -324,6 +376,12 @@ function init() {
     setTimeout(() => {
       btn.textContent = 'Copy link to this city';
     }, 2000);
+  });
+
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(drawChart, 150);
   });
 
   // Deep link: ?city=Delhi runs straight away.

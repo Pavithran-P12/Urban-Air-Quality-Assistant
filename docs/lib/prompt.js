@@ -8,7 +8,8 @@ import { BAND_GUIDANCE } from './aqi.js';
 export const SYSTEM_INSTRUCTION = `You are the Urban Air Quality Assistant. You help families in polluted cities cut how much dirty air they breathe and how much pollution they create.
 
 GROUNDING
-- Use only the numbers in AIR DATA and DERIVED FACTS. Never invent or round differently any AQI or pollutant value.
+- Use only the numbers in AIR DATA, DERIVED FACTS and WEATHER. Never invent or round differently any AQI or pollutant value.
+- The data is a model estimate, not a reading from a sensor at the user's door. Never call it "measured" or "live sensor" data.
 - Follow the SAFETY GUIDANCE for the current band exactly. Never suggest opening windows or outdoor exercise when it says not to.
 - If CLEANEST HOURS are not meaningfully better (outlook says no real improvement), say so and do not tell people to wait for a better hour.
 
@@ -103,8 +104,9 @@ export function clock(iso) {
  * @param {{place:object, air:object}} report
  * @param {object} profile - output of parseProfile()
  */
-export function buildPrompt({ place, air }, profile) {
+export function buildPrompt({ place, air, weather }, profile) {
   const p = air.pollutants;
+  const w = weather ?? {};
   const guide = BAND_GUIDANCE[air.category.level] ?? BAND_GUIDANCE.unknown;
   const hours = air.cleanestHours.map((h) => `${clock(h.time)} (AQI ${h.aqi})`).join(', ') || 'no forecast';
   const o = air.outlook ?? { improves: false, drop: 0 };
@@ -115,15 +117,22 @@ export function buildPrompt({ place, air }, profile) {
   return [
     'AIR DATA',
     `Location: ${place.name}`,
+    `Source: ${air.source?.label ?? 'unknown'} (${air.source?.kind ?? 'modelled'}, ${air.source?.resolution ?? 'unknown resolution'})`,
     `Local time now: ${air.time} (${clock(air.time)})`,
     `US AQI: ${air.usAqi} (${air.category.label})${air.aqiEstimated ? ' [estimated from PM2.5]' : ''}`,
     `PM2.5: ${fmt(p.pm2_5)} = ${air.pm25WhoMultiple ?? '?'}x the WHO 24h guideline | PM10: ${fmt(p.pm10)}`,
     `NO2: ${fmt(p.nitrogen_dioxide)} | O3: ${fmt(p.ozone)} | CO: ${fmt(p.carbon_monoxide)}`,
+    ...(air.localIndex ? [`Local index: ${air.localIndex.name} ${air.localIndex.aqi} (${air.localIndex.category})`] : []),
     '',
     'DERIVED FACTS',
-    `Main pollutant: ${air.dominant ? `${air.dominant.name} (sub-index ${air.dominant.aqi})` : 'unknown'}`,
+    `Main pollutant: ${air.dominant ? `${air.dominant.name}${typeof air.dominant.aqi === 'number' ? ` (sub-index ${air.dominant.aqi})` : ''}` : 'unknown'}`,
     `Cleanest hours in next 24h: ${hours}`,
     `Outlook: ${outlookText}`,
+    '',
+    'WEATHER',
+    `Now: ${fmt(w.temperature, ' °C')}, wind ${fmt(w.wind, ' km/h')}`,
+    `Wind at the cleanest hour: ${fmt(w.windAtBest, ' km/h')} | Max rain chance next 24h: ${fmt(w.rainChanceMax24, '%')}`,
+    '(Stronger wind and rain usually disperse or wash out smog; calm, cold nights trap it.)',
     '',
     `SAFETY GUIDANCE for "${air.category.label}"`,
     `Outdoor exercise: ${guide.outdoorExercise}`,

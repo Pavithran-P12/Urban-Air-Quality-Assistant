@@ -47,7 +47,7 @@ export function quotedAqis(s) {
  * @param {{usAqi:number, cleanestHours:{aqi:number}[]}} air
  */
 export function isGrounded(advice, air, tolerance = 5) {
-  const known = [air.usAqi, ...air.cleanestHours.map((h) => h.aqi), air.dominant?.aqi].filter((n) => typeof n === 'number');
+  const known = [air.usAqi, ...air.cleanestHours.map((h) => h.aqi), air.dominant?.aqi, air.localIndex?.aqi].filter((n) => typeof n === 'number');
   const all = [advice.summary, advice.riskNote, advice.answer, ...advice.routine.flatMap((r) => [r.time, r.action, r.why])].join(' ');
   return quotedAqis(all).every((n) => known.some((k) => Math.abs(k - n) <= tolerance));
 }

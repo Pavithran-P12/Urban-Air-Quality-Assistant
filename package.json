@@ -5,10 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "npx --yes serve@latest docs",
-    "test": "node --test"
+    "test": "node --test",
+    "lint": "eslint .",
+    "check": "npm run lint && npm test"
   },
   "engines": {
     "node": ">=22"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0"
+  }
 }
