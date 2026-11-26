@@ -47,15 +47,23 @@ export function quotedAqis(s) {
  * @param {{usAqi:number, cleanestHours:{aqi:number}[]}} air
  */
 export function isGrounded(advice, air, tolerance = 5) {
-  const known = [air.usAqi, ...air.cleanestHours.map((h) => h.aqi), air.dominant?.aqi, air.localIndex?.aqi].filter((n) => typeof n === 'number');
-  const all = [advice.summary, advice.riskNote, advice.answer, ...advice.routine.flatMap((r) => [r.time, r.action, r.why])].join(' ');
+  const known = [air.usAqi, ...air.cleanestHours.map((h) => h.aqi), air.dominant?.aqi, air.localIndex?.aqi].filter(
+    (n) => typeof n === 'number',
+  );
+  const all = [
+    advice.summary,
+    advice.riskNote,
+    advice.answer,
+    ...advice.routine.flatMap((r) => [r.time, r.action, r.why]),
+  ].join(' ');
   return quotedAqis(all).every((n) => known.some((k) => Math.abs(k - n) <= tolerance));
 }
 
 /**
  * Clean advice into the canonical shape. Throws AdviceError if it is unusable.
  * @param {unknown} data parsed JSON
- * @param {object} [air] when given, also run the grounding check
+ * @param {import('./types.js').AirReading} [air] when given, also run the grounding check
+ * @returns {import('./types.js').Advice}
  */
 export function normaliseAdvice(data, air) {
   const advice = {

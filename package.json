@@ -7,7 +7,9 @@
     "dev": "npx --yes serve@latest docs",
     "test": "node --test",
     "lint": "eslint .",
-    "check": "npm run lint && npm test"
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run format:check && npm test"
   },
   "engines": {
     "node": ">=22"
@@ -16,6 +18,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.15.0",
-    "globals": "^17.14.0"
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1"
   }
 }

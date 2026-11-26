@@ -1,5 +1,6 @@
 import { categorize, cleanestHours, dominantPollutant, outlook, pm25Multiple, pm25ToUsAqi } from './aqi.js';
-import { SOURCES, fromGoogle } from './normalise.js';
+import { fromGoogle } from './normalise.js';
+import { SOURCES } from './sources.js';
 import { fetchWeather, summariseWeather } from './weather.js';
 
 const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
@@ -30,11 +31,17 @@ async function getJson(url, fetchImpl) {
   } catch {
     throw new UpstreamError('Air quality service is unreachable right now. Check your connection and try again.');
   }
-  if (!res.ok) throw new UpstreamError(`Air quality service returned an error (${res.status}). Please try again shortly.`);
+  if (!res.ok)
+    throw new UpstreamError(`Air quality service returned an error (${res.status}). Please try again shortly.`);
   return res.json();
 }
 
-const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+const norm = (s) =>
+  String(s ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim();
 
 /**
  * Pick the best geocoding match. "Hyderabad, Pakistan" or "Portland, Maine" prefers results whose
@@ -88,7 +95,15 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
   const params = new URLSearchParams({
     latitude: String(latitude),
     longitude: String(longitude),
-    current: ['us_aqi', 'pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone', 'carbon_monoxide', ...Object.values(SUB_INDEX_FIELDS)].join(','),
+    current: [
+      'us_aqi',
+      'pm2_5',
+      'pm10',
+      'nitrogen_dioxide',
+      'ozone',
+      'carbon_monoxide',
+      ...Object.values(SUB_INDEX_FIELDS),
+    ].join(','),
     hourly: 'us_aqi,pm2_5',
     forecast_days: '2',
     timezone: 'auto',
@@ -104,12 +119,18 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
     aqiEstimated = usAqi !== null;
   }
   if (usAqi === null) {
-    throw new UpstreamError('No air quality readings are available for this location right now. Try a nearby city.', 404);
+    throw new UpstreamError(
+      'No air quality readings are available for this location right now. Try a nearby city.',
+      404,
+    );
   }
 
   // Only look at hours from "now" onward; fill missing hourly AQI from hourly PM2.5.
   const times = data.hourly?.time ?? [];
-  const startIdx = Math.max(0, times.findIndex((t) => t >= c.time));
+  const startIdx = Math.max(
+    0,
+    times.findIndex((t) => t >= c.time),
+  );
   const hourly = {
     time: times.slice(startIdx),
     us_aqi: times.slice(startIdx).map((_, i) => {
@@ -175,6 +196,7 @@ export async function fetchGoogleAir(url, latitude, longitude, fetchImpl = fetch
  * @param {{city?:string, latitude?:number, longitude?:number}} loc
  * @param {typeof fetch} [fetchImpl]
  * @param {{airDataUrl?:string}} [options]
+ * @returns {Promise<import('./types.js').AirReport>}
  */
 export async function getAirReport(loc, fetchImpl = fetch, { airDataUrl } = {}) {
   let place;

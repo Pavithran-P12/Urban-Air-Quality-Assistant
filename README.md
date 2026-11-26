@@ -10,6 +10,34 @@ A GenAI-powered assistant that helps families and communities get through severe
 
 Every recommendation explains *why* it helps, so people understand the direct effect of their choices.
 
+**Live app:** https://pavithran-p12.github.io/Urban-Air-Quality-Assistant/
+
+## Chosen vertical
+
+**Urban Air Quality Assistant**: a smart, dynamic assistant for families and communities coping with severe winter smog and urban air pollution. The persona is a parent or carer in a dense Indian city (Delhi, Chennai, Mumbai, Kolkata, Bengaluru) who checks every morning whether it is safe to go out, and wants practical, low-cost steps to protect their household and cut the pollution they create.
+
+## Approach and logic
+
+The assistant makes decisions from the user's context in three layers, so every number is computed, not guessed:
+
+1. **Context in.** Location (city, "City, Country" or GPS) plus a household profile: who needs extra care (children, older relatives, pregnancy, asthma/COPD, heart conditions, pets), commute mode, cooking fuel, heating, purifier ownership and an optional question.
+2. **Deterministic decisions in code** (`docs/lib/`):
+   - US AQI from PM2.5 with the EPA 2024 breakpoints, the AQI band, and the safety guidance for that band (outdoor exercise, windows, masks).
+   - The main pollutant, the PM2.5 multiple of the WHO daily guideline, and the country's own index.
+   - The cleanest hours in the next 24 h and whether air *meaningfully* improves (15+ AQI points), with wind and rain context.
+   - Tailoring rules: sensitive household members get explicit precautions; swaps are only suggested for things the household actually does (no "switch to LPG" if they already cook with LPG).
+3. **Gemini explains and personalises.** The computed facts and profile go to Gemini, which returns a structured plan (routine with time slots, indoor hacks with cost, swaps with impact). The output is fact-checked against the data; if it is wrong or unavailable, the rules engine produces the same plan shape.
+
+| User context | How the assistant responds |
+|---|---|
+| AQI ≤ 50 (good) | Outdoor exercise and opening windows to ventilate |
+| AQI 101–150 + children or asthma in the household | Sensitive members stay indoors, inhalers to hand, N95 outdoors |
+| AQI > 200 | Stay in, seal gaps, run purifiers or a DIY box-fan filter |
+| Air improves later today | Errands and airing out scheduled at the cleanest hour |
+| No improvement forecast | Keeps trips short; never says "wait for a better hour" |
+| Commutes by car or two-wheeler | Recirculation or N95 plus side streets; metro or car-pool swaps |
+| Cooks with wood or kerosene | LPG / piped gas / induction swap, marked high impact |
+
 ## How it works
 
 ```
@@ -54,6 +82,15 @@ Browser (GitHub Pages)
 | Air purifier | yes / no |
 | Free-text question | optional, max 300 chars |
 
+## Assumptions
+
+- **US AQI is the headline scale** because its bands and health guidance are widely documented. For Indian locations, India's NAQI from Google is shown alongside it, since that is the number in local news.
+- **All air data is modelled, not measured.** The Google Air Quality API estimates a 500 m area; CAMS via Open-Meteo estimates a ~45 km area. The app labels this everywhere and never presents a value as a sensor reading.
+- **PM2.5 drives the US AQI** shown when the provider doesn't give US AQI directly; this matches how AQI behaves in Indian winter smog, where PM2.5 is usually the dominant pollutant.
+- **Guidance is general, not medical.** The assistant flags warning signs and says when to see a doctor, but never diagnoses or suggests medication.
+- **Users are on a phone**, often with a slow connection: no framework, no build step, self-hosted fonts and a 10-minute cache per place.
+- **Costs** are given in rupees ("under ₹1,000") because the primary persona is in India.
+
 ## Run locally
 
 Requires **Node.js 22+**.
@@ -63,7 +100,7 @@ npm run dev     # serves docs/ at http://localhost:3000
 npm test
 ```
 
-The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. `npm run check` runs ESLint and the tests; GitHub Actions runs both on every push. There are 66 tests covering AQI banding and PM2.5 conversion, input validation, city disambiguation, missing-data fallbacks, the rules engine across AQI levels, prompt grounding, the fact-checking of model output, and both Edge Functions (CORS, origin checks, payload limits, sanitisation, caching, retries and rate limiting), unit conversion, time zones and source fallback.
+The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. `npm run check` runs ESLint, a Prettier format check and the tests; GitHub Actions runs all three on every push. There are 68 tests covering AQI banding and PM2.5 conversion, input validation, city disambiguation, missing-data fallbacks, the rules engine across AQI levels, prompt grounding, the fact-checking of model output, and both Edge Functions (CORS, origin checks, payload limits, sanitisation, caching, retries and rate limiting), unit conversion, time zones and source fallback.
 
 ## Deploy
 
@@ -95,15 +132,20 @@ Semantic HTML landmarks, labelled fields and fieldsets, a skip link, visible foc
 
 ```
 docs/                        static site served by GitHub Pages
-  index.html, styles.css     UI
-  app.js                     UI logic and caching
+  index.html, styles.css     markup and styles (self-hosted Anek fonts in fonts/)
+  app.js                     page controller: form, caching, flow
+  views.js                   rendering (textContent only)
+  api.js                     client for the Gemini Edge Function
   chart.js                   accessible 48 h forecast chart (SVG + table)
   config.js                  public config (function URLs, cache time)
-  lib/
+  lib/                       framework-free logic, shared with the Edge Functions and tests
+    types.js                 JSDoc types for every data shape
     airQuality.js            geocoding, source selection, Open-Meteo fallback
-    normalise.js             provider data → one shape (units, time zones, source labels)
+    normalise.js             provider data → one shape (units, time zones)
+    sources.js               source labels (provider, modelled/measured, grid size)
     weather.js               Open-Meteo weather (wind, rain)
     aqi.js                   AQI bands, PM2.5→AQI, main pollutant, cleanest hours, safety guidance
+    time.js                  local time formatting
     prompt.js                system instruction, prompt builder, JSON schema
     advice.js                cleans and fact-checks advice before display
     rules.js                 offline advice engine
@@ -112,8 +154,8 @@ supabase/functions/
   _shared/http.js            CORS, rate limiter, TTL cache, JSON body reader
   air-data/                  Google Air Quality API proxy (cached)
   air-advice/                Gemini advice (reuses docs/lib modules)
-test/                        unit, data and Edge Function tests
-.github/workflows/ci.yml     lint + tests on every push
+test/                        unit, data and Edge Function tests (node --test)
+.github/workflows/ci.yml     lint, format check and tests on every push
 ```
 
 ## Disclaimer

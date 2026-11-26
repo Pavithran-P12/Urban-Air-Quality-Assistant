@@ -126,10 +126,26 @@ export function outlook(currentAqi, hours) {
  */
 export const BAND_GUIDANCE = Object.freeze({
   good: { outdoorExercise: 'fine for everyone', windows: 'open to ventilate', mask: 'not needed' },
-  moderate: { outdoorExercise: 'fine; very sensitive people take it easy', windows: 'open briefly to ventilate', mask: 'not needed' },
-  sensitive: { outdoorExercise: 'sensitive groups move it indoors', windows: 'open only in the cleanest hours', mask: 'N95 for sensitive groups outdoors' },
-  unhealthy: { outdoorExercise: 'move indoors for everyone', windows: 'keep closed except the cleanest hour', mask: 'N95 for everyone outdoors' },
+  moderate: {
+    outdoorExercise: 'fine; very sensitive people take it easy',
+    windows: 'open briefly to ventilate',
+    mask: 'not needed',
+  },
+  sensitive: {
+    outdoorExercise: 'sensitive groups move it indoors',
+    windows: 'open only in the cleanest hours',
+    mask: 'N95 for sensitive groups outdoors',
+  },
+  unhealthy: {
+    outdoorExercise: 'move indoors for everyone',
+    windows: 'keep closed except the cleanest hour',
+    mask: 'N95 for everyone outdoors',
+  },
   'very-unhealthy': { outdoorExercise: 'avoid; stay indoors', windows: 'keep closed', mask: 'N95 essential outdoors' },
-  hazardous: { outdoorExercise: 'avoid all outdoor activity', windows: 'keep closed and seal gaps', mask: 'N95 essential; limit any trip outside' },
+  hazardous: {
+    outdoorExercise: 'avoid all outdoor activity',
+    windows: 'keep closed and seal gaps',
+    mask: 'N95 essential; limit any trip outside',
+  },
   unknown: { outdoorExercise: 'use caution', windows: 'use caution', mask: 'consider an N95 in heavy traffic' },
 });

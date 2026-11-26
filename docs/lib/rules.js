@@ -5,7 +5,7 @@
  * Every recommendation follows BAND_GUIDANCE so it never contradicts the safety level.
  */
 import { BAND_GUIDANCE } from './aqi.js';
-import { clock } from './prompt.js';
+import { clock } from './time.js';
 
 const SENSITIVE = {
   children: 'children',
@@ -36,7 +36,10 @@ function buildRoutine(air, profile, rank, sensitive) {
   } else {
     steps.push({
       time: '6-9 AM',
-      action: rank >= 4 ? 'Stay in and exercise indoors (yoga, stretching, stairs).' : 'Move your workout indoors or keep it short and gentle.',
+      action:
+        rank >= 4
+          ? 'Stay in and exercise indoors (yoga, stretching, stairs).'
+          : 'Move your workout indoors or keep it short and gentle.',
       why: 'Winter mornings trap smog near the ground (temperature inversion), and hard breathing pulls more fine particles deep into the lungs.',
     });
   }
@@ -64,7 +67,10 @@ function buildRoutine(air, profile, rank, sensitive) {
   } else if (profile.commute === 'two-wheeler' || profile.commute === 'walk' || profile.commute === 'cycle') {
     steps.push({
       time: 'Commute',
-      action: rank >= 2 ? 'Wear a well-fitted N95 and take quieter side streets.' : 'Take quieter side streets where you can.',
+      action:
+        rank >= 2
+          ? 'Wear a well-fitted N95 and take quieter side streets.'
+          : 'Take quieter side streets where you can.',
       why: 'Riders and walkers breathe road exhaust directly; a sealed N95 filters about 95% of fine particles and side streets often have far less traffic smoke.',
     });
   } else if (profile.commute === 'public-transport' && rank >= 2) {
@@ -166,7 +172,8 @@ function buildSwaps(profile) {
     swaps.push({
       instead: 'Driving alone',
       try: 'Metro or bus, car-pooling, or an e-bike for trips under 5 km',
-      impact: 'You avoid sitting in traffic exhaust, and each trip you switch removes NO₂ and PM2.5 from roads people walk along.',
+      impact:
+        'You avoid sitting in traffic exhaust, and each trip you switch removes NO₂ and PM2.5 from roads people walk along.',
       impactLevel: 'medium',
     });
   }
@@ -195,6 +202,12 @@ function buildSwaps(profile) {
   return swaps.slice(0, 4);
 }
 
+/**
+ * Build advice without AI.
+ * @param {import('./types.js').AirReport} report
+ * @param {import('./types.js').Profile} profile
+ * @returns {import('./types.js').Advice}
+ */
 export function buildRuleAdvice({ place, air }, profile) {
   const level = air.category.level;
   const rank = LEVEL_RANK[level] ?? 2;
@@ -218,7 +231,8 @@ export function buildRuleAdvice({ place, air }, profile) {
   } else if (rank >= 3) {
     riskNote = `Even healthy adults may get a sore throat, cough or tired eyes today. Outdoor exercise: ${guide.outdoorExercise}. See a doctor for breathlessness or chest pain.`;
   } else {
-    riskNote = 'Low risk for healthy adults today. Children, older people and anyone with asthma should still avoid busy roads.';
+    riskNote =
+      'Low risk for healthy adults today. Children, older people and anyone with asthma should still avoid busy roads.';
   }
 
   return {

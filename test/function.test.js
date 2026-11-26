@@ -37,7 +37,14 @@ async function validBody(profile = { household: ['children'] }) {
 }
 
 const make = (opts = {}) =>
-  createHandler({ apiKey: 'secret', allowedOrigins: [ORIGIN], logger: silent, retryDelayMs: 0, fetchImpl: geminiFetch(), ...opts });
+  createHandler({
+    apiKey: 'secret',
+    allowedOrigins: [ORIGIN],
+    logger: silent,
+    retryDelayMs: 0,
+    fetchImpl: geminiFetch(),
+    ...opts,
+  });
 
 describe('air-advice edge function', () => {
   test('returns normalised Gemini advice and keeps the key in a header', async () => {
@@ -122,7 +129,14 @@ describe('air-advice edge function', () => {
   test('treats malformed model JSON as retryable', async () => {
     const report = await getAirReport({ city: 'Delhi' }, mockFetch());
     const fetchImpl = geminiFetch({ raw: '{"summary": tru' }, {});
-    const advice = await callGemini({ report, profile: parseProfile({}), apiKey: 'k', model: 'm', fetchImpl, retryDelayMs: 0 });
+    const advice = await callGemini({
+      report,
+      profile: parseProfile({}),
+      apiKey: 'k',
+      model: 'm',
+      fetchImpl,
+      retryDelayMs: 0,
+    });
     assert.ok(advice.summary);
     assert.equal(fetchImpl.calls.length, 2);
   });

@@ -19,7 +19,10 @@ export function corsFor(req, allowedOrigins) {
     Vary: 'Origin',
   };
   const json = (status, body, extra = {}) =>
-    new Response(JSON.stringify(body), { status, headers: { ...headers, 'Content-Type': 'application/json', ...extra } });
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...headers, 'Content-Type': 'application/json', ...extra },
+    });
   return { allowed, headers, json };
 }
 

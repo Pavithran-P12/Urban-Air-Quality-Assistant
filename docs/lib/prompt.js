@@ -4,6 +4,7 @@
  * JSON schema. Computing facts in code instead of asking the model keeps answers accurate.
  */
 import { BAND_GUIDANCE } from './aqi.js';
+import { clock } from './time.js';
 
 export const SYSTEM_INSTRUCTION = `You are the Urban Air Quality Assistant. You help families in polluted cities cut how much dirty air they breathe and how much pollution they create.
 
@@ -33,7 +34,10 @@ USER QUESTION
 export const ADVICE_SCHEMA = {
   type: 'object',
   properties: {
-    summary: { type: 'string', description: "Two sentences: today's air with AQI and main pollutant, then the one most important action." },
+    summary: {
+      type: 'string',
+      description: "Two sentences: today's air with AQI and main pollutant, then the one most important action.",
+    },
     riskNote: { type: 'string', description: 'Who in the household is at risk and the warning signs to watch for.' },
     routine: {
       type: 'array',
@@ -92,17 +96,11 @@ const label = (v) => LABELS[v] ?? v;
 
 const fmt = (v, unit = ' µg/m³') => (typeof v === 'number' ? `${Math.round(v)}${unit}` : 'not available');
 
-/** "2026-11-26T14:00" -> "2 PM" */
-export function clock(iso) {
-  if (typeof iso !== 'string' || !/T\d{2}:/.test(iso)) return '?';
-  const h = Number(iso.slice(11, 13));
-  return `${h % 12 || 12} ${h >= 12 ? 'PM' : 'AM'}`;
-}
-
 /**
  * Build the user prompt from validated inputs.
- * @param {{place:object, air:object}} report
- * @param {object} profile - output of parseProfile()
+ * @param {import('./types.js').AirReport} report
+ * @param {import('./types.js').Profile} profile output of parseProfile()
+ * @returns {string}
  */
 export function buildPrompt({ place, air, weather }, profile) {
   const p = air.pollutants;
@@ -122,7 +120,9 @@ export function buildPrompt({ place, air, weather }, profile) {
     `US AQI: ${air.usAqi} (${air.category.label})${air.aqiEstimated ? ' [estimated from PM2.5]' : ''}`,
     `PM2.5: ${fmt(p.pm2_5)} = ${air.pm25WhoMultiple ?? '?'}x the WHO 24h guideline | PM10: ${fmt(p.pm10)}`,
     `NO2: ${fmt(p.nitrogen_dioxide)} | O3: ${fmt(p.ozone)} | CO: ${fmt(p.carbon_monoxide)}`,
-    ...(air.localIndex ? [`Local index: ${air.localIndex.name} ${air.localIndex.aqi} (${air.localIndex.category})`] : []),
+    ...(air.localIndex
+      ? [`Local index: ${air.localIndex.name} ${air.localIndex.aqi} (${air.localIndex.category})`]
+      : []),
     '',
     'DERIVED FACTS',
     `Main pollutant: ${air.dominant ? `${air.dominant.name}${typeof air.dominant.aqi === 'number' ? ` (sub-index ${air.dominant.aqi})` : ''}` : 'unknown'}`,

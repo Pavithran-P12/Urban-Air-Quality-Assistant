@@ -3,6 +3,7 @@
  * Everything the user sends is treated as untrusted and normalised to a known shape
  * before it reaches the prompt or any upstream service.
  */
+import { SOURCES } from './sources.js';
 
 export const OPTIONS = Object.freeze({
   commute: ['walk', 'cycle', 'public-transport', 'two-wheeler', 'car', 'work-from-home'],
@@ -24,12 +25,14 @@ export class ValidationError extends Error {
 /** Strip control characters and angle brackets, collapse whitespace, cap length. */
 export function cleanText(value, max = MAX_TEXT) {
   if (typeof value !== 'string') return '';
-  return value
-    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-    .replace(/[\u0000-\u001f\u007f<>]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, max);
+  return (
+    value
+      // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+      .replace(/[\u0000-\u001f\u007f<>]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max)
+  );
 }
 
 function pick(value, allowed, fallback) {
@@ -56,12 +59,6 @@ export function parseLocation(input = {}) {
   return { city };
 }
 
-/** Server-side copy of the source labels; the client's labels are never trusted. */
-const SOURCE_KINDS = Object.freeze({
-  google: { provider: 'google', label: 'Google Air Quality API', kind: 'modelled', resolution: '500 m grid' },
-  'open-meteo': { provider: 'open-meteo', label: 'CAMS global model via Open-Meteo', kind: 'modelled', resolution: '~45 km grid' },
-});
-
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /**
@@ -74,14 +71,15 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 export function sanitizeReport(input = {}, { categorize, outlook, POLLUTANT_NAMES }) {
   const air = input.air ?? {};
   const usAqi = num(air.usAqi);
-  if (usAqi === null || usAqi < 0 || usAqi > 1000) throw new ValidationError('Air quality reading is missing or invalid.');
+  if (usAqi === null || usAqi < 0 || usAqi > 1000)
+    throw new ValidationError('Air quality reading is missing or invalid.');
   const p = air.pollutants ?? {};
   const hours = (Array.isArray(air.cleanestHours) ? air.cleanestHours.slice(0, 3) : [])
     .map((h) => ({ time: cleanText(h?.time, 20), aqi: num(h?.aqi) }))
     .filter((h) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(h.time) && h.aqi !== null);
   const d = air.dominant;
   const li = air.localIndex;
-  const src = SOURCE_KINDS[air.source?.provider];
+  const src = SOURCES[air.source?.provider];
   const w = input.weather ?? {};
   return {
     place: { name: cleanText(input.place?.name, 120) || 'Unknown location' },
@@ -108,8 +106,11 @@ export function sanitizeReport(input = {}, { categorize, outlook, POLLUTANT_NAME
         d && typeof d.key === 'string' && Object.hasOwn(POLLUTANT_NAMES, d.key)
           ? { key: d.key, name: POLLUTANT_NAMES[d.key], aqi: num(d.aqi) }
           : null,
-      localIndex: li && num(li.aqi) !== null ? { name: cleanText(li.name, 60), aqi: num(li.aqi), category: cleanText(li.category, 60) } : null,
-      source: src ?? SOURCE_KINDS['open-meteo'],
+      localIndex:
+        li && num(li.aqi) !== null
+          ? { name: cleanText(li.name, 60), aqi: num(li.aqi), category: cleanText(li.category, 60) }
+          : null,
+      source: src ?? SOURCES['open-meteo'],
       cleanestHours: hours,
       outlook: outlook(usAqi, hours),
     },
@@ -117,7 +118,9 @@ export function sanitizeReport(input = {}, { categorize, outlook, POLLUTANT_NAME
 }
 
 /**
- * Validate the household/lifestyle profile.
+ * Validate the household/lifestyle profile. Unknown values fall back to safe defaults.
+ * @param {Record<string, unknown>} [input]
+ * @returns {import('./types.js').Profile}
  */
 export function parseProfile(input = {}) {
   const household = Array.isArray(input.household)

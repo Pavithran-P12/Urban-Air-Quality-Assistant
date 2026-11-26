@@ -3,6 +3,9 @@
  * data came from. All conversions are deterministic and documented.
  */
 import { POLLUTANT_NAMES, categorize, cleanestHours, outlook, pm25Multiple, pm25ToUsAqi } from './aqi.js';
+import { SOURCES } from './sources.js';
+
+export { SOURCES };
 
 /** Molar volume of an ideal gas at 25 °C and 1 atm, in litres. µg/m³ = ppb × molecular weight / 24.45. */
 export const MOLAR_VOLUME_L = 24.45;
@@ -18,12 +21,6 @@ export const GOOGLE_CODES = Object.freeze({
   o3: 'ozone',
   co: 'carbon_monoxide',
   so2: 'sulphur_dioxide',
-});
-
-/** Where a reading came from and how precise it is. Shown in the UI and given to the model. */
-export const SOURCES = Object.freeze({
-  google: { provider: 'google', label: 'Google Air Quality API', kind: 'modelled', resolution: '500 m grid' },
-  'open-meteo': { provider: 'open-meteo', label: 'CAMS global model via Open-Meteo', kind: 'modelled', resolution: '~45 km grid' },
 });
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);

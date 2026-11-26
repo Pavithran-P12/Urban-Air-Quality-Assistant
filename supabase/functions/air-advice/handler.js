@@ -94,7 +94,8 @@ export function createHandler({
     if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
     if (!allowed) return json(403, { error: 'Origin not allowed' });
     if (!apiKey) return json(503, { error: 'AI is not configured' });
-    if (!rateLimiter(clientIp(req))) return json(429, { error: 'Too many requests. Please wait a minute.' }, { 'Retry-After': '60' });
+    if (!rateLimiter(clientIp(req)))
+      return json(429, { error: 'Too many requests. Please wait a minute.' }, { 'Retry-After': '60' });
 
     const { body, error } = await readJson(req, MAX_BODY_BYTES);
     if (error) return json(error.status, { error: error.message });

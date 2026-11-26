@@ -87,7 +87,12 @@ export async function fetchGoogleAir({ latitude, longitude, apiKey, fetchImpl, n
   };
 
   const [current, hours] = await Promise.all([
-    post(fetchImpl, 'currentConditions:lookup', apiKey, { location, universalAqi: false, extraComputations, languageCode: 'en' }),
+    post(fetchImpl, 'currentConditions:lookup', apiKey, {
+      location,
+      universalAqi: false,
+      extraComputations,
+      languageCode: 'en',
+    }),
     forecastPages(),
   ]);
 

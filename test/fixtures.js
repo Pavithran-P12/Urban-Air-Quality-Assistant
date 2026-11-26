@@ -1,5 +1,7 @@
 export const geocodeResponse = {
-  results: [{ name: 'Delhi', admin1: 'Delhi', country: 'India', latitude: 28.65, longitude: 77.23, timezone: 'Asia/Kolkata' }],
+  results: [
+    { name: 'Delhi', admin1: 'Delhi', country: 'India', latitude: 28.65, longitude: 77.23, timezone: 'Asia/Kolkata' },
+  ],
 };
 
 const hours = Array.from({ length: 48 }, (_, i) => {
@@ -81,7 +83,9 @@ export function mockFetch({
     calls.push(u);
     if (fail) throw new Error('network down');
     if (u.includes('air-data')) {
-      return google ? { ok: true, status: 200, json: async () => google } : { ok: false, status: 503, json: async () => ({}) };
+      return google
+        ? { ok: true, status: 200, json: async () => google }
+        : { ok: false, status: 503, json: async () => ({}) };
     }
     const body = u.includes('geocoding') ? geocode : u.includes('api.open-meteo.com/v1/forecast') ? weather : air;
     return { ok: status < 400, status, json: async () => body };

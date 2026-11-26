@@ -5,7 +5,7 @@
  * Hover, focus or tap a bar for its value; the full table sits below for screen readers.
  */
 import { categorize } from './lib/aqi.js';
-import { clock } from './lib/prompt.js';
+import { clock, dayName } from './lib/time.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_W = 720;
@@ -13,17 +13,12 @@ const MIN_W = 300;
 const H = 220;
 const PAD = { left: 34, right: 8, top: 34, bottom: 42 };
 const GRID = [50, 100, 150, 200, 300];
-const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function svg(tag, attrs = {}, text) {
   const node = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
   if (text != null) node.textContent = text;
   return node;
-}
-
-function dayName(iso) {
-  return DAY.at(new Date(`${iso.slice(0, 10)}T00:00:00Z`).getUTCDay());
 }
 
 /** A bar whose top corners are rounded (radius r) and whose base sits square on the baseline. */
@@ -95,7 +90,8 @@ export function renderForecastChart(container, tableBody, forecast, best, weathe
       const tx = x + w / 2;
       bars.append(svg('line', { x1: tx, x2: tx, y1: base, y2: base + 4, class: 'tick' }));
       bars.append(svg('text', { x: tx, y: H - 24, 'text-anchor': 'middle', class: 'tick-label' }, clock(h.time)));
-      if (hour === 0) bars.append(svg('text', { x: tx, y: H - 6, 'text-anchor': 'middle', class: 'tick-day' }, dayName(h.time)));
+      if (hour === 0)
+        bars.append(svg('text', { x: tx, y: H - 6, 'text-anchor': 'middle', class: 'tick-day' }, dayName(h.time)));
     }
 
     if (lowest && h.time === lowest.time) {
@@ -104,7 +100,13 @@ export function renderForecastChart(container, tableBody, forecast, best, weathe
       bars.append(svg('line', { x1: cx, x2: cx, y1: 18, y2: top - 4, class: 'best-leader' }));
       bars.append(svg('circle', { cx, cy: top - 4, r: 2.5, class: 'best-mark' }));
       const anchor = cx > W - 80 ? 'end' : cx < PAD.left + 60 ? 'start' : 'middle';
-      bars.append(svg('text', { x: cx, y: 13, 'text-anchor': anchor, class: 'best-label' }, `Cleanest: ${clock(h.time)}, AQI ${h.aqi}`));
+      bars.append(
+        svg(
+          'text',
+          { x: cx, y: 13, 'text-anchor': anchor, class: 'best-label' },
+          `Cleanest: ${clock(h.time)}, AQI ${h.aqi}`,
+        ),
+      );
     }
 
     // Hit target: the full column, wider than the bar, so hover and tap are easy.

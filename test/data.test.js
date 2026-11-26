@@ -18,7 +18,11 @@ describe('normalise', () => {
   test('converts ppb to µg/m³ with the 25 °C molar volume', () => {
     assert.equal(toMicrograms({ code: 'no2', value: 24.45, units: 'PARTS_PER_BILLION' }), 46);
     assert.equal(toMicrograms({ code: 'pm25', value: 12.3, units: 'MICROGRAMS_PER_CUBIC_METER' }), 12.3);
-    assert.equal(toMicrograms({ code: 'pm25', value: 5, units: 'PARTS_PER_BILLION' }), null, 'no molecular weight for particles');
+    assert.equal(
+      toMicrograms({ code: 'pm25', value: 5, units: 'PARTS_PER_BILLION' }),
+      null,
+      'no molecular weight for particles',
+    );
     assert.equal(toMicrograms({ code: 'no2', value: -1, units: 'PARTS_PER_BILLION' }), null);
     assert.equal(MOLAR_VOLUME_L, 24.45);
   });
@@ -34,7 +38,12 @@ describe('normalise', () => {
     assert.equal(air.usAqi, aqi.pm25ToUsAqi(150.2));
     assert.equal(air.aqiEstimated, true);
     assert.match(air.aqiMethod, /PM2\.5/);
-    assert.deepEqual(air.localIndex, { code: 'ind_cpcb', name: 'AQI (IN)', aqi: 312, category: 'Very poor air quality' });
+    assert.deepEqual(air.localIndex, {
+      code: 'ind_cpcb',
+      name: 'AQI (IN)',
+      aqi: 312,
+      category: 'Very poor air quality',
+    });
     assert.equal(air.dominant.key, 'pm2_5');
     assert.equal(air.source.resolution, '500 m grid');
     assert.equal(air.source.kind, 'modelled');
@@ -85,7 +94,9 @@ describe('source selection', () => {
   });
 
   test('the prompt states the source, local index and weather; the server re-labels the source', async () => {
-    const report = await getAirReport({ city: 'Delhi' }, mockFetch({ google: googleResponse }), { airDataUrl: AIR_DATA });
+    const report = await getAirReport({ city: 'Delhi' }, mockFetch({ google: googleResponse }), {
+      airDataUrl: AIR_DATA,
+    });
     report.air.source = { provider: 'google', label: 'LIVE SENSOR', kind: 'measured' };
     const clean = sanitizeReport(report, aqi);
     assert.equal(clean.air.source.kind, 'modelled');
@@ -100,7 +111,9 @@ describe('source selection', () => {
   test('the grounding check accepts the local index value', async () => {
     const { normaliseAdvice } = await import('../docs/lib/advice.js');
     const { goodAdvice } = await import('./fixtures.js');
-    const report = await getAirReport({ city: 'Delhi' }, mockFetch({ google: googleResponse }), { airDataUrl: AIR_DATA });
+    const report = await getAirReport({ city: 'Delhi' }, mockFetch({ google: googleResponse }), {
+      airDataUrl: AIR_DATA,
+    });
     const advice = {
       ...goodAdvice,
       summary: `India's index reads AQI 312 today (US AQI ${report.air.usAqi}).`,
@@ -123,7 +136,9 @@ describe('air-data edge function', () => {
           json: async () => ({
             dateTime: '2026-11-26T04:00:00Z',
             regionCode: 'in',
-            indexes: [{ code: 'ind_cpcb', displayName: 'AQI (IN)', aqi: 300, category: 'Very poor', dominantPollutant: 'pm25' }],
+            indexes: [
+              { code: 'ind_cpcb', displayName: 'AQI (IN)', aqi: 300, category: 'Very poor', dominantPollutant: 'pm25' },
+            ],
             pollutants: [{ code: 'pm25', concentration: { value: 140, units: 'MICROGRAMS_PER_CUBIC_METER' } }],
           }),
         };
@@ -156,7 +171,14 @@ describe('air-data edge function', () => {
       body: method === 'POST' ? JSON.stringify(body) : undefined,
     });
 
-  const make = (opts = {}) => createAirDataHandler({ apiKey: 'gkey', allowedOrigins: [ORIGIN], logger: silent, fetchImpl: googleFetch(), ...opts });
+  const make = (opts = {}) =>
+    createAirDataHandler({
+      apiKey: 'gkey',
+      allowedOrigins: [ORIGIN],
+      logger: silent,
+      fetchImpl: googleFetch(),
+      ...opts,
+    });
 
   test('cellKey groups nearby points into ~500 m cells', () => {
     assert.equal(cellKey(13.086, 80.2707), cellKey(13.0855, 80.2712));
@@ -165,11 +187,21 @@ describe('air-data edge function', () => {
 
   test('fetches current + 48 h forecast, trims it, keeps the key in a header', async () => {
     const fetchImpl = googleFetch({ pages: 2 });
-    const data = await fetchGoogleAir({ latitude: 13.08, longitude: 80.27, apiKey: 'gkey', fetchImpl, now: () => Date.UTC(2026, 10, 26, 4, 30) });
+    const data = await fetchGoogleAir({
+      latitude: 13.08,
+      longitude: 80.27,
+      apiKey: 'gkey',
+      fetchImpl,
+      now: () => Date.UTC(2026, 10, 26, 4, 30),
+    });
     assert.equal(data.provider, 'google');
     assert.equal(data.current.localIndex.aqi, 300);
     assert.equal(data.hourly.length, 48);
-    assert.deepEqual(data.hourly[0].pollutants.map((p) => p.code), ['pm25'], 'forecast keeps only PM2.5');
+    assert.deepEqual(
+      data.hourly[0].pollutants.map((p) => p.code),
+      ['pm25'],
+      'forecast keeps only PM2.5',
+    );
     assert.ok(fetchImpl.calls.every((c) => c.headers['X-Goog-Api-Key'] === 'gkey' && !c.url.includes('gkey')));
     const fc = fetchImpl.calls.find((c) => c.url.includes('forecast'));
     assert.equal(fc.body.period.startTime, '2026-11-26T05:00:00.000Z');
@@ -189,7 +221,10 @@ describe('air-data edge function', () => {
   test('validates origin, method, key, body and coordinates', async () => {
     assert.equal((await make()(request({}, { method: 'OPTIONS' }))).status, 204);
     assert.equal((await make()(request(null, { method: 'GET' }))).status, 405);
-    assert.equal((await make()(request({ latitude: 1, longitude: 1 }, { origin: 'https://evil.example' }))).status, 403);
+    assert.equal(
+      (await make()(request({ latitude: 1, longitude: 1 }, { origin: 'https://evil.example' }))).status,
+      403,
+    );
     assert.equal((await make({ apiKey: '' })(request({ latitude: 1, longitude: 1 }))).status, 503);
     assert.equal((await make()(request({ latitude: 200, longitude: 1 }))).status, 400);
     assert.equal((await make()(request({ latitude: 'x', longitude: 1 }))).status, 400);
@@ -221,8 +256,17 @@ describe('shared http helpers', () => {
     assert.equal(cache.get('b'), undefined, 'expired');
   });
 
+  test('source labels are frozen so nothing can relabel modelled data at runtime', async () => {
+    const { SOURCES } = await import('../docs/lib/sources.js');
+    assert.ok(Object.isFrozen(SOURCES.google));
+    assert.ok(Object.values(SOURCES).every((s) => s.kind === 'modelled'));
+  });
+
   test('parseOrigins has a safe default and trims entries', () => {
-    assert.deepEqual(parseOrigins(' https://a.example , ,https://b.example'), ['https://a.example', 'https://b.example']);
+    assert.deepEqual(parseOrigins(' https://a.example , ,https://b.example'), [
+      'https://a.example',
+      'https://b.example',
+    ]);
     assert.ok(parseOrigins(undefined).includes('https://pavithran-p12.github.io'));
   });
 });
