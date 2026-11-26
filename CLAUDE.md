@@ -6,5 +6,6 @@
 - If a dependency needs install scripts (e.g. esbuild, sharp), add it to the npm install-script allowlist in package.json so installs don't warn.
 - Keep the Gemini model name configurable via `GEMINI_MODEL`; check the Gemini models page before changing the default.
 - The rules engine (`docs/lib/rules.js`) and Gemini output must share the shape in `ADVICE_SCHEMA` (`docs/lib/prompt.js`).
+- When you change any file in `docs/`, bump the `?v=` number on `styles.css` and `app.js` in `docs/index.html` so browsers don't keep a cached copy.
 - Render model output with `textContent` only. Never use `innerHTML` for API data.
 - `npm test` must pass before every push.

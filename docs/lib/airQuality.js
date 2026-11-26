@@ -1,8 +1,17 @@
-import { categorize, cleanestHours, pm25Multiple } from './aqi.js';
+import { categorize, cleanestHours, dominantPollutant, outlook, pm25Multiple, pm25ToUsAqi } from './aqi.js';
 
 const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 const AIR_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const TIMEOUT_MS = 8000;
+
+const SUB_INDEX_FIELDS = {
+  pm2_5: 'us_aqi_pm2_5',
+  pm10: 'us_aqi_pm10',
+  nitrogen_dioxide: 'us_aqi_nitrogen_dioxide',
+  ozone: 'us_aqi_ozone',
+  carbon_monoxide: 'us_aqi_carbon_monoxide',
+  sulphur_dioxide: 'us_aqi_sulphur_dioxide',
+};
 
 export class UpstreamError extends Error {
   constructor(message, status = 502) {
@@ -17,22 +26,47 @@ async function getJson(url, fetchImpl) {
   try {
     res = await fetchImpl(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch {
-    throw new UpstreamError('Air quality service is unreachable right now.');
+    throw new UpstreamError('Air quality service is unreachable right now. Check your connection and try again.');
   }
-  if (!res.ok) throw new UpstreamError(`Air quality service returned ${res.status}.`);
+  if (!res.ok) throw new UpstreamError(`Air quality service returned an error (${res.status}). Please try again shortly.`);
   return res.json();
+}
+
+const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+
+/**
+ * Pick the best geocoding match. "Hyderabad, Pakistan" or "Portland, Maine" prefers results whose
+ * region/country match the text after the comma; otherwise the API's top (most populous) result wins.
+ * @param {object[]} results
+ * @param {string} [qualifier]
+ */
+export function pickPlace(results, qualifier) {
+  if (!results?.length) return null;
+  const q = norm(qualifier);
+  if (q) {
+    const match = results.find((r) =>
+      [r.country, r.country_code, r.admin1, r.admin2].some((v) => norm(v) === q || norm(v).startsWith(q)),
+    );
+    if (match) return match;
+  }
+  return results[0];
 }
 
 /**
  * Resolve a city name to coordinates using Open-Meteo geocoding (no API key needed).
- * @param {string} city
+ * Accepts "City" or "City, Region/Country".
+ * @param {string} query
  * @param {typeof fetch} [fetchImpl]
  */
-export async function geocode(city, fetchImpl = fetch) {
-  const url = `${GEOCODE_URL}?${new URLSearchParams({ name: city, count: '1', format: 'json' })}`;
+export async function geocode(query, fetchImpl = fetch) {
+  const [name, ...rest] = query.split(',');
+  const city = name.trim();
+  const url = `${GEOCODE_URL}?${new URLSearchParams({ name: city, count: '10', format: 'json' })}`;
   const data = await getJson(url, fetchImpl);
-  const place = data?.results?.[0];
-  if (!place) throw new UpstreamError(`Could not find a place called "${city}".`, 404);
+  const place = pickPlace(data?.results, rest.join(','));
+  if (!place) {
+    throw new UpstreamError(`We couldn't find "${city}". Check the spelling or try a nearby larger city.`, 404);
+  }
   return {
     name: [place.name, place.admin1, place.country].filter(Boolean).join(', '),
     latitude: place.latitude,
@@ -43,6 +77,7 @@ export async function geocode(city, fetchImpl = fetch) {
 
 /**
  * Fetch current + next-24h air quality for coordinates.
+ * Falls back to computing AQI from PM2.5 if the upstream AQI is missing.
  * @param {number} latitude
  * @param {number} longitude
  * @param {typeof fetch} [fetchImpl]
@@ -51,8 +86,8 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
   const params = new URLSearchParams({
     latitude: String(latitude),
     longitude: String(longitude),
-    current: 'us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,carbon_monoxide',
-    hourly: 'us_aqi',
+    current: ['us_aqi', 'pm2_5', 'pm10', 'nitrogen_dioxide', 'ozone', 'carbon_monoxide', ...Object.values(SUB_INDEX_FIELDS)].join(','),
+    hourly: 'us_aqi,pm2_5',
     forecast_days: '2',
     timezone: 'auto',
   });
@@ -60,18 +95,35 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
   const c = data?.current;
   if (!c) throw new UpstreamError('Air quality data is unavailable for this location.');
 
-  // Only look at hours from "now" onward.
-  const now = c.time;
-  const startIdx = Math.max(0, (data.hourly?.time ?? []).findIndex((t) => t >= now));
+  let usAqi = c.us_aqi;
+  let aqiEstimated = false;
+  if (typeof usAqi !== 'number') {
+    usAqi = pm25ToUsAqi(c.pm2_5);
+    aqiEstimated = usAqi !== null;
+  }
+  if (usAqi === null) {
+    throw new UpstreamError('No air quality readings are available for this location right now. Try a nearby city.', 404);
+  }
+
+  // Only look at hours from "now" onward; fill missing hourly AQI from hourly PM2.5.
+  const times = data.hourly?.time ?? [];
+  const startIdx = Math.max(0, times.findIndex((t) => t >= c.time));
   const hourly = {
-    time: (data.hourly?.time ?? []).slice(startIdx),
-    us_aqi: (data.hourly?.us_aqi ?? []).slice(startIdx),
+    time: times.slice(startIdx),
+    us_aqi: times.slice(startIdx).map((_, i) => {
+      const v = data.hourly?.us_aqi?.[startIdx + i];
+      return typeof v === 'number' ? v : pm25ToUsAqi(data.hourly?.pm2_5?.[startIdx + i]);
+    }),
   };
+
+  const hours = cleanestHours(hourly);
+  const subIndices = Object.fromEntries(Object.entries(SUB_INDEX_FIELDS).map(([key, field]) => [key, c[field]]));
 
   return {
     time: c.time,
-    usAqi: c.us_aqi,
-    category: categorize(c.us_aqi),
+    usAqi,
+    aqiEstimated,
+    category: categorize(usAqi),
     pollutants: {
       pm2_5: c.pm2_5,
       pm10: c.pm10,
@@ -80,7 +132,9 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
       carbon_monoxide: c.carbon_monoxide,
     },
     pm25WhoMultiple: pm25Multiple(c.pm2_5),
-    cleanestHours: cleanestHours(hourly),
+    dominant: dominantPollutant(subIndices),
+    cleanestHours: hours,
+    outlook: outlook(usAqi, hours),
   };
 }
 

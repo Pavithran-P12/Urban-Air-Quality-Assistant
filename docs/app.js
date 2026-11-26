@@ -1,6 +1,7 @@
 import { getAirReport } from './lib/airQuality.js';
 import { buildRuleAdvice } from './lib/rules.js';
 import { parseLocation, parseProfile } from './lib/validate.js';
+import { normaliseAdvice } from './lib/advice.js';
 import { ADVICE_FUNCTION_URL, ADVICE_TIMEOUT_MS } from './config.js';
 
 /** Short, plain-language health message per AQI band. */
@@ -22,6 +23,9 @@ const BAND_VAR = {
   'very-unhealthy': '--aqi-very',
   hazardous: '--aqi-hazard',
 };
+
+const COST_LABEL = { free: 'Free', low: 'Low cost', medium: 'Some cost' };
+const IMPACT_LABEL = { high: 'High impact', medium: 'Medium impact', low: 'Small win' };
 
 const POLLUTANTS = [
   ['pm2_5', 'PM2.5'],
@@ -74,7 +78,7 @@ async function fetchAiAdvice(report, profile) {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    return data?.advice ?? null;
+    return data?.advice ? normaliseAdvice(data.advice) : null;
   } catch {
     return null;
   }
@@ -90,6 +94,14 @@ function renderAir({ place, air }) {
   $('aqi-place').textContent = place.name;
   $('aqi-time').textContent = air.time ? `Updated ${hourLabel(air.time)} local time` : '';
   $('aqi-number').textContent = air.usAqi;
+  const dominant = $('aqi-dominant');
+  dominant.hidden = !air.dominant && !air.aqiEstimated;
+  dominant.textContent = [
+    air.dominant ? `Main pollutant: ${air.dominant.name}` : '',
+    air.aqiEstimated ? 'AQI estimated from PM2.5' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   $('aqi-label').textContent = air.category.label;
   $('aqi-msg').textContent = BAND_MESSAGE[level] ?? '';
 
@@ -116,6 +128,10 @@ function renderAir({ place, air }) {
       return li;
     }),
   );
+  const o = air.outlook;
+  $('hours-note').textContent = o?.improves
+    ? `About ${o.drop} points cleaner than now. Plan errands and airing out for then.`
+    : 'No big improvement expected in the next 24 hours.';
 }
 
 function renderAdvice(advice, source) {
@@ -136,7 +152,9 @@ function renderAdvice(advice, source) {
   $('indoor').replaceChildren(
     ...advice.indoor.map((t) => {
       const li = el('li');
-      li.append(el('span', 'what', t.tip), el('p', 'why', t.why));
+      const head = el('div', 'item-head');
+      head.append(el('span', 'what', t.tip), el('span', `badge badge-cost-${t.cost}`, COST_LABEL[t.cost] ?? ''));
+      li.append(head, el('p', 'why', t.why));
       return li;
     }),
   );
@@ -147,7 +165,7 @@ function renderAdvice(advice, source) {
       const row = el('div', 'swap-row');
       row.append(el('span', 'swap-from', a.instead), icon('arrow'), el('span', 'swap-to', a.try));
       const impact = el('p', 'impact');
-      impact.append(el('strong', '', 'Impact'), el('span', '', a.impact));
+      impact.append(el('strong', `level-${a.impactLevel}`, `${IMPACT_LABEL[a.impactLevel] ?? 'Impact'}`), el('span', '', a.impact));
       li.append(row, impact);
       return li;
     }),

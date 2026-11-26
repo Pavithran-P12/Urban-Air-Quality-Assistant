@@ -60,20 +60,25 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 /**
  * Rebuild an air report received from a client into a clean, known shape.
  * Used server-side so only plain numbers and short strings ever reach the prompt.
+ * Derived fields (category, outlook, dominant pollutant name) are recomputed, never trusted.
  * @param {{place?:object, air?:object}} input
- * @param {(aqi:number)=>object} categorize
+ * @param {{categorize:Function, outlook:Function, dominantPollutant:Function}} aqi helpers from aqi.js
  */
-export function sanitizeReport(input = {}, categorize) {
+export function sanitizeReport(input = {}, { categorize, outlook, dominantPollutant }) {
   const air = input.air ?? {};
   const usAqi = num(air.usAqi);
   if (usAqi === null || usAqi < 0 || usAqi > 1000) throw new ValidationError('Air quality reading is missing or invalid.');
   const p = air.pollutants ?? {};
-  const hours = Array.isArray(air.cleanestHours) ? air.cleanestHours.slice(0, 3) : [];
+  const hours = (Array.isArray(air.cleanestHours) ? air.cleanestHours.slice(0, 3) : [])
+    .map((h) => ({ time: cleanText(h?.time, 20), aqi: num(h?.aqi) }))
+    .filter((h) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(h.time) && h.aqi !== null);
+  const d = air.dominant;
   return {
     place: { name: cleanText(input.place?.name, 120) || 'Unknown location' },
     air: {
-      time: cleanText(air.time, 20),
+      time: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(air.time) ? air.time : '',
       usAqi,
+      aqiEstimated: air.aqiEstimated === true,
       category: categorize(usAqi),
       pollutants: {
         pm2_5: num(p.pm2_5),
@@ -83,9 +88,9 @@ export function sanitizeReport(input = {}, categorize) {
         carbon_monoxide: num(p.carbon_monoxide),
       },
       pm25WhoMultiple: num(air.pm25WhoMultiple),
-      cleanestHours: hours
-        .map((h) => ({ time: cleanText(h?.time, 20), aqi: num(h?.aqi) }))
-        .filter((h) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(h.time) && h.aqi !== null),
+      dominant: d && typeof d.key === 'string' ? dominantPollutant({ [d.key]: num(d.aqi) }) : null,
+      cleanestHours: hours,
+      outlook: outlook(usAqi, hours),
     },
   };
 }

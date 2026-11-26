@@ -16,6 +16,11 @@ export const airResponse = {
     nitrogen_dioxide: 60.2,
     ozone: 20.5,
     carbon_monoxide: 1500,
+    us_aqi_pm2_5: 245,
+    us_aqi_pm10: 150,
+    us_aqi_nitrogen_dioxide: 40,
+    us_aqi_ozone: 15,
+    us_aqi_carbon_monoxide: 12,
   },
   hourly: {
     time: hours,
@@ -24,14 +29,30 @@ export const airResponse = {
 };
 
 /** Fake fetch that routes by URL. Records calls for assertions. */
-export function mockFetch({ geocode = geocodeResponse, air = airResponse, fail = false } = {}) {
+export function mockFetch({ geocode = geocodeResponse, air = airResponse, fail = false, status = 200 } = {}) {
   const calls = [];
   const impl = async (url) => {
     calls.push(String(url));
     if (fail) throw new Error('network down');
     const body = String(url).includes('geocoding') ? geocode : air;
-    return { ok: true, status: 200, json: async () => body };
+    return { ok: status < 400, status, json: async () => body };
   };
   impl.calls = calls;
   return impl;
 }
+
+/** A complete, grounded advice object (AQI values match airResponse). */
+export const goodAdvice = {
+  summary: 'Air is Very Unhealthy (AQI 245), mainly PM2.5. Stay indoors.',
+  riskNote: 'Keep kids in.',
+  routine: [
+    { time: '7-9 AM', action: 'Exercise indoors', why: 'Inversion traps smog' },
+    { time: '2 PM', action: 'Run errands at AQI 120', why: 'Cleanest hour' },
+  ],
+  indoor: [
+    { tip: 'Damp mop', why: 'Less dust', cost: 'free' },
+    { tip: 'Box-fan filter', why: 'Cuts PM2.5', cost: 'low' },
+  ],
+  alternatives: [{ instead: 'Driving', try: 'Metro', impact: 'Less exhaust', impactLevel: 'medium' }],
+  answer: '',
+};

@@ -23,6 +23,15 @@ Browser (GitHub Pages) ──► Open-Meteo (geocoding + air quality, no key nee
 2. It sends the readings and the household profile to a **Supabase Edge Function**. The function re-validates everything, then asks **Google Gemini** for advice in a strict JSON schema (`responseJsonSchema`). The API key never reaches the browser.
 3. If the function or Gemini is unavailable, a **deterministic rules engine** in the browser produces the same response shape, so the app always works.
 
+### Accuracy and edge cases
+
+- **Facts are computed in code, not by the model.** The prompt gets the AQI band's safety guidance (exercise, windows, masks), the main pollutant from per-pollutant sub-indices, the cleanest hours, and whether air *meaningfully* improves (15+ AQI points). The model is told not to promise a better hour when there isn't one.
+- **Every answer is fact-checked.** Model output is cleaned (trimmed, length-capped, incomplete items dropped, enums defaulted), and any answer that quotes an AQI number not in the data is rejected and retried once. Transient Gemini errors (429/5xx, malformed JSON) are retried once; a bad key is not.
+- **Missing data:** if the upstream AQI is missing, it is computed from PM2.5 with the EPA 2024 breakpoints (and labelled "estimated"); missing hourly AQI is filled the same way. Places with no readings get a clear message.
+- **Ambiguous cities:** "Hyderabad, Pakistan" or "Portland, Maine" picks the matching region or country.
+- **Tailoring rules:** good-air days suggest ventilation and outdoor exercise; bad-air days never do. Nobody is told to switch to something they already use, and purifier owners get purifier care tips instead of a DIY build.
+- **Clear explanations:** every routine step has a concrete time slot and says what it reduces. Indoor hacks carry a cost badge (Free / Low cost / Some cost), and swaps carry an impact level.
+
 ### Household profile used for tailoring
 
 | Input | Options |
@@ -43,7 +52,7 @@ npm run dev     # serves docs/ at http://localhost:3000
 npm test
 ```
 
-The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. They cover AQI banding, input validation, the air-quality client, the rules engine, prompt building, and the Edge Function (CORS, origin checks, payload limits, sanitisation, Gemini errors).
+The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. There are 48 tests covering AQI banding and PM2.5 conversion, input validation, city disambiguation, missing-data fallbacks, the rules engine across AQI levels, prompt grounding, the fact-checking of model output, and the Edge Function (CORS, origin checks, payload limits, sanitisation, retries and rate limiting).
 
 ## Deploy
 
@@ -60,7 +69,7 @@ The tests use Node's built-in test runner with mocked APIs, so no network or API
 
 - The Gemini key is a Supabase secret and is never sent to the browser.
 - All input is validated and whitelisted; free text is stripped of markup and fenced in the prompt as untrusted, to resist prompt injection.
-- The Edge Function only accepts requests from allowed origins, caps bodies at 10 KB, and rebuilds the air report from plain numbers before prompting.
+- The Edge Function only accepts requests from allowed origins, rate-limits bursts per IP (10/min), caps bodies at 10 KB, and rebuilds the air report from plain numbers (re-deriving band, outlook and main pollutant) before prompting.
 - A strict Content Security Policy limits the page to its own scripts and three known APIs. The page renders with `textContent` only (no `innerHTML`), so model output can't inject HTML.
 - Network calls time out (8 s for air data, 20–25 s for AI), and errors show friendly messages.
 
@@ -77,7 +86,8 @@ docs/                      static site served by GitHub Pages
   config.js                public config (function URL)
   lib/
     airQuality.js          Open-Meteo geocoding + air quality client
-    aqi.js                 AQI bands, WHO PM2.5 comparison, cleanest-hours finder
+    aqi.js                 AQI bands, PM2.5→AQI, main pollutant, cleanest hours, safety guidance
+    advice.js              cleans and fact-checks advice before display
     prompt.js              system instruction, prompt builder, JSON schema
     rules.js               offline advice engine
     validate.js            input validation and sanitisation

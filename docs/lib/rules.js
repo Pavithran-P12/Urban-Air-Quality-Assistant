@@ -1,131 +1,234 @@
 /**
  * Deterministic, offline advice engine.
- * Used when Gemini is not configured or fails, so the app always gives safe, useful guidance.
- * Returns the same shape as the AI response (see ADVICE_SCHEMA in prompt.js).
+ * Used when Gemini is not configured, fails, or gives ungrounded output, so the app always gives
+ * safe, useful guidance. Returns the same shape as the AI response (see ADVICE_SCHEMA in prompt.js).
+ * Every recommendation follows BAND_GUIDANCE so it never contradicts the safety level.
  */
+import { BAND_GUIDANCE } from './aqi.js';
+import { clock } from './prompt.js';
 
-const SENSITIVE = ['children', 'elderly', 'pregnant', 'asthma-or-copd', 'heart-condition'];
+const SENSITIVE = {
+  children: 'children',
+  elderly: 'elderly family members',
+  pregnant: 'anyone pregnant',
+  'asthma-or-copd': 'anyone with asthma or COPD',
+  'heart-condition': 'anyone with a heart condition',
+};
 
-function hourLabel(iso) {
-  const h = Number(iso?.slice(11, 13));
-  if (!Number.isFinite(h)) return 'later today';
-  const suffix = h >= 12 ? 'PM' : 'AM';
-  return `${h % 12 || 12} ${suffix}`;
+const LEVEL_RANK = { good: 0, moderate: 1, sensitive: 2, unhealthy: 3, 'very-unhealthy': 4, hazardous: 5, unknown: 2 };
+
+function listJoin(items) {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
 }
 
-export function buildRuleAdvice({ place, air }, profile) {
-  const aqi = air.usAqi;
-  const level = air.category.level;
-  const bad = aqi > 100;
-  const veryBad = aqi > 200;
-  const sensitive = profile.household.filter((h) => SENSITIVE.includes(h));
-  const best = air.cleanestHours[0];
-  const bestText = best ? `${hourLabel(best.time)} (AQI ${best.aqi})` : 'when AQI is lowest';
+function buildRoutine(air, profile, rank, sensitive) {
+  const o = air.outlook ?? { improves: false };
+  const best = air.cleanestHours.find((h) => h.aqi === o.bestAqi) ?? air.cleanestHours[0];
+  const steps = [];
 
-  const routine = [];
-  routine.push({
-    time: 'Morning',
-    action: bad
-      ? 'Skip outdoor exercise at dawn; smog is usually trapped near the ground early in winter. Exercise indoors.'
-      : 'A short outdoor walk is fine. Avoid busy roads.',
-    why: 'Winter temperature inversions trap pollutants close to the ground in the early morning.',
-  });
-  routine.push({
-    time: best ? hourLabel(best.time) : 'Cleanest hour',
-    action: `Do errands, school runs and ventilation around ${bestText}.`,
-    why: 'Planning around the cleanest hour cuts how much polluted air you breathe without changing what you do.',
-  });
-  if (profile.commute === 'car' || profile.commute === 'two-wheeler') {
-    routine.push({
-      time: 'Commute',
-      action: 'Use public transport or car-pool at least 2 days a week; keep car windows closed with recirculation on.',
-      why: 'Every car trip you skip removes exhaust (NO₂ and PM2.5) from your street, and recirculation lowers in-cabin exposure.',
+  if (rank <= 1) {
+    steps.push({
+      time: '6-8 AM',
+      action: 'Go for your walk, run or yoga outside, away from main roads.',
+      why: 'Air is clean enough today; staying 50-100 m from heavy traffic still cuts the exhaust you breathe noticeably.',
     });
-  } else if (bad && (profile.commute === 'walk' || profile.commute === 'cycle')) {
-    routine.push({
-      time: 'Commute',
-      action: 'Take side streets instead of main roads and wear a well-fitted N95/FFP2 mask.',
-      why: 'Pollution can be much lower just one street away from heavy traffic; a sealed N95 filters most PM2.5.',
-    });
-  }
-  routine.push({
-    time: 'Evening',
-    action: 'Close windows after sunset and avoid burning anything (waste, leaves, incense, mosquito coils).',
-    why: 'Smog builds up again in the evening as the air cools, and burning adds fine particles at home.',
-  });
-
-  const indoor = [
-    {
-      tip: profile.hasPurifier
-        ? 'Run your purifier on high in the bedroom with the door closed, and clean or replace the filter on schedule.'
-        : 'Build a DIY purifier: tape a MERV-13 furnace filter to the back of a box fan.',
-      why: 'A HEPA/MERV-13 filter in a closed room can cut indoor PM2.5 sharply; a box-fan filter costs a fraction of a purifier.',
-    },
-    {
-      tip: 'Mop floors with a damp cloth instead of sweeping or dry dusting.',
-      why: 'Sweeping kicks settled fine dust back into the air you breathe.',
-    },
-    {
-      tip: 'Use the kitchen chimney/exhaust fan every time you cook and keep a lid on pots.',
-      why: 'Cooking, especially frying, is one of the biggest indoor sources of fine particles.',
-    },
-  ];
-  if (veryBad) {
-    indoor.unshift({
-      tip: 'Seal gaps around windows and doors with tape or wet towels, and keep one "clean room" for sleeping.',
-      why: 'At this level, outdoor air leaking in is the main source of indoor pollution.',
+  } else {
+    steps.push({
+      time: '6-9 AM',
+      action: rank >= 4 ? 'Stay in and exercise indoors (yoga, stretching, stairs).' : 'Move your workout indoors or keep it short and gentle.',
+      why: 'Winter mornings trap smog near the ground (temperature inversion), and hard breathing pulls more fine particles deep into the lungs.',
     });
   }
 
-  const alternatives = [];
+  if (best && o.improves) {
+    steps.push({
+      time: clock(best.time),
+      action: `Do errands, school runs and air out your home now. AQI drops to about ${best.aqi}.`,
+      why: `This is the cleanest hour in the next day, about ${o.drop} points better than now, so you breathe less pollution doing the same things.`,
+    });
+  } else if (rank >= 2) {
+    steps.push({
+      time: 'All day',
+      action: 'Keep outdoor trips short and bundle errands into one trip.',
+      why: "Air isn't forecast to improve in the next 24 hours, so total time outside is what you can control.",
+    });
+  }
+
+  if (profile.commute === 'car') {
+    steps.push({
+      time: 'Commute',
+      action: 'Keep windows up with air recirculation on, and car-pool or take the metro when you can.',
+      why: 'Recirculation can cut in-cabin fine particles sharply in traffic, and every trip you share removes one car of exhaust from the road.',
+    });
+  } else if (profile.commute === 'two-wheeler' || profile.commute === 'walk' || profile.commute === 'cycle') {
+    steps.push({
+      time: 'Commute',
+      action: rank >= 2 ? 'Wear a well-fitted N95 and take quieter side streets.' : 'Take quieter side streets where you can.',
+      why: 'Riders and walkers breathe road exhaust directly; a sealed N95 filters about 95% of fine particles and side streets often have far less traffic smoke.',
+    });
+  } else if (profile.commute === 'public-transport' && rank >= 2) {
+    steps.push({
+      time: 'Commute',
+      action: 'Wear an N95 while walking to and waiting at the station.',
+      why: 'Roadside waiting is where metro and bus riders get most of their exposure.',
+    });
+  }
+
+  steps.push({
+    time: '6-10 PM',
+    action:
+      rank >= 2
+        ? 'Close windows by sunset and skip incense, mosquito coils and any burning.'
+        : 'Close windows at night if smoke from burning drifts in, and skip incense and mosquito coils.',
+    why: 'Smog builds again as air cools at night, and indoor smoke adds fine particles right where you sleep.',
+  });
+
+  if (sensitive.length && rank >= 2) {
+    steps.splice(1, 0, {
+      time: 'Morning',
+      action: `Keep ${listJoin(sensitive)} indoors and have any prescribed inhalers or medicines within reach.`,
+      why: 'Sensitive groups react at lower pollution levels; being prepared turns a bad-air day into a manageable one.',
+    });
+  }
+  return steps.slice(0, 5);
+}
+
+function buildIndoor(profile, rank) {
+  const tips = [];
+  if (rank >= 4) {
+    tips.push({
+      tip: 'Seal gaps around windows and doors with tape or a rolled wet towel, and make one "clean room" to sleep in.',
+      why: 'At this level outdoor air leaking in is the biggest source of indoor pollution.',
+      cost: 'free',
+    });
+  }
+  if (rank >= 2) {
+    tips.push(
+      profile.hasPurifier
+        ? {
+            tip: 'Run your purifier on high in the room you sleep in, door closed. Clean or replace the filter on schedule.',
+            why: 'A purifier works best in one closed room; a clogged filter can cut its output a lot.',
+            cost: 'free',
+          }
+        : {
+            tip: 'Make a DIY purifier: strap a MERV-13 filter to the back of a box or table fan and run it in the bedroom.',
+            why: 'Studies show these cut indoor PM2.5 substantially for a fraction of a purifier price.',
+            cost: 'low',
+          },
+    );
+  } else {
+    tips.push({
+      tip: 'Open windows on opposite sides for 10-15 minutes to cross-ventilate.',
+      why: 'When outdoor air is clean, fresh air flushes out cooking fumes, dust and CO₂ that build up indoors.',
+      cost: 'free',
+    });
+  }
+  tips.push(
+    {
+      tip: 'Switch on the kitchen chimney or exhaust fan before you start cooking and cover pots.',
+      why: 'Cooking, especially frying and tadka, is one of the biggest indoor sources of fine particles.',
+      cost: 'free',
+    },
+    {
+      tip: 'Mop with a damp cloth instead of sweeping or dry dusting.',
+      why: 'Sweeping throws settled fine dust back into the air you breathe.',
+      cost: 'free',
+    },
+    {
+      tip: 'Skip incense, mosquito coils and candles; use a mosquito net or electric repellent instead.',
+      why: 'Burning one coil can release as much fine particle pollution as many cigarettes.',
+      cost: 'free',
+    },
+  );
+  return tips.slice(0, 5);
+}
+
+function buildSwaps(profile) {
+  const swaps = [];
   if (profile.cooking === 'biomass' || profile.cooking === 'kerosene') {
-    alternatives.push({
-      instead: `Cooking with ${profile.cooking}`,
-      try: 'LPG, piped gas or an induction cooktop',
-      impact: 'Solid-fuel and kerosene cooking is a major cause of household air pollution; switching removes most indoor smoke.',
+    swaps.push({
+      instead: profile.cooking === 'biomass' ? 'Cooking on wood or biomass' : 'Cooking on kerosene',
+      try: 'LPG (PMUY connection if eligible), piped gas or induction',
+      impact: 'Removes most of the smoke your family breathes at home and cuts soot your neighbours breathe too.',
+      impactLevel: 'high',
     });
   }
   if (['wood', 'coal', 'kerosene'].includes(profile.heating)) {
-    alternatives.push({
+    swaps.push({
       instead: `Heating with ${profile.heating}`,
       try: 'An oil-filled electric radiator, warm layers and draught-proofing',
-      impact: 'Removes smoke inside your home and cuts emissions your neighbours breathe.',
+      impact: 'Ends indoor smoke from heating and removes a nightly smoke source from your street.',
+      impactLevel: 'high',
     });
   }
   if (profile.commute === 'car') {
-    alternatives.push({
+    swaps.push({
       instead: 'Driving alone',
-      try: 'Metro/bus, car-pool, or an e-bike for short trips',
-      impact: 'A typical short car trip emits several hundred grams of CO₂ plus NO₂ and PM2.5 at street level.',
+      try: 'Metro or bus, car-pooling, or an e-bike for trips under 5 km',
+      impact: 'You avoid sitting in traffic exhaust, and each trip you switch removes NO₂ and PM2.5 from roads people walk along.',
+      impactLevel: 'medium',
     });
   }
-  alternatives.push({
+  if (profile.commute === 'two-wheeler') {
+    swaps.push({
+      instead: 'A petrol two-wheeler for short trips',
+      try: 'Walking or cycling under 2 km, or an electric scooter',
+      impact: 'Cuts tailpipe exhaust on crowded streets; electric scooters have no tailpipe at all.',
+      impactLevel: 'medium',
+    });
+  }
+  if (profile.heating === 'gas' || profile.cooking === 'lpg' || profile.cooking === 'piped-gas') {
+    swaps.push({
+      instead: 'Cooking without ventilation',
+      try: 'Always run the chimney or open a window while the gas is on',
+      impact: 'Gas flames still release NO₂; venting keeps it from building up indoors.',
+      impactLevel: 'low',
+    });
+  }
+  swaps.push({
     instead: 'Burning dry leaves or garbage',
-    try: 'Compost leaves and hand over waste to collection',
-    impact: 'Open burning releases dense smoke right where people live and walk.',
+    try: 'Compost leaves and hand waste to municipal collection',
+    impact: 'Open burning releases dense smoke at street level where children walk and play.',
+    impactLevel: 'medium',
   });
+  return swaps.slice(0, 4);
+}
 
-  const groups = sensitive.length ? sensitive.join(', ').replace(/-/g, ' ') : null;
-  const summary =
-    `Air in ${place.name} is "${air.category.label}" right now (US AQI ${aqi}` +
-    (air.pm25WhoMultiple ? `, PM2.5 about ${air.pm25WhoMultiple}× the WHO daily guideline` : '') +
-    `). ` +
-    (bad ? 'Limit time outdoors and plan around the cleanest hours.' : 'Normal activities are fine for most people.');
+export function buildRuleAdvice({ place, air }, profile) {
+  const level = air.category.level;
+  const rank = LEVEL_RANK[level] ?? 2;
+  const guide = BAND_GUIDANCE[level] ?? BAND_GUIDANCE.unknown;
+  const sensitive = profile.household.filter((h) => SENSITIVE[h]).map((h) => SENSITIVE[h]);
 
-  const riskNote = groups
-    ? `Your household includes ${groups}. ${bad ? 'They should stay indoors as much as possible today and keep any prescribed inhalers or medicines handy.' : 'Keep an eye on symptoms like coughing or breathlessness.'} Seek medical help if breathing becomes difficult.`
-    : level === 'good' || level === 'moderate'
-      ? 'Low risk for healthy adults today.'
-      : 'Even healthy adults may feel irritation today. Reduce long or intense outdoor activity.';
+  const main = air.dominant ? `, mainly ${air.dominant.name.replace(/ \(.*\)$/, '')}` : '';
+  const who = air.pm25WhoMultiple ? ` PM2.5 is about ${air.pm25WhoMultiple}× the WHO daily limit.` : '';
+  const topAction =
+    rank >= 4
+      ? 'Stay indoors with windows closed and wear an N95 if you must go out.'
+      : rank >= 2
+        ? 'Keep exercise indoors and wear an N95 on busy roads.'
+        : 'Enjoy time outside, away from busy roads.';
+
+  const summary = `Air in ${place.name} is ${air.category.label} right now (AQI ${air.usAqi}${main}).${who} ${topAction}`;
+
+  let riskNote;
+  if (sensitive.length) {
+    riskNote = `${listJoin(sensitive).replace(/^./, (c) => c.toUpperCase())} ${rank >= 2 ? 'should limit time outside today.' : 'should be fine, but watch for symptoms.'} See a doctor if anyone has breathlessness, chest tightness or wheezing that does not settle.`;
+  } else if (rank >= 3) {
+    riskNote = `Even healthy adults may get a sore throat, cough or tired eyes today. Outdoor exercise: ${guide.outdoorExercise}. See a doctor for breathlessness or chest pain.`;
+  } else {
+    riskNote = 'Low risk for healthy adults today. Children, older people and anyone with asthma should still avoid busy roads.';
+  }
 
   return {
     summary,
     riskNote,
-    routine,
-    indoor,
-    alternatives,
+    routine: buildRoutine(air, profile, rank, sensitive),
+    indoor: buildIndoor(profile, rank),
+    alternatives: buildSwaps(profile),
     answer: profile.question
-      ? 'AI answers are not available right now, so here is general guidance based on current air quality. Ask again later for a personalised answer.'
+      ? "Our AI assistant is busy right now, so we couldn't answer your question. The plan above follows official safety guidance for today's air. Please try again in a minute."
       : '',
   };
 }
