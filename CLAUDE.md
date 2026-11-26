@@ -10,3 +10,5 @@
 - When you change any file in `docs/`, bump the `?v=` number on `styles.css` and `app.js` in `docs/index.html` so browsers don't keep a cached copy.
 - Render model output with `textContent` only. Never use `innerHTML` for API data.
 - `npm run check` (ESLint + tests) must pass before every push.
+- Design direction: the sky band is the one bold element (its colour and skyline visibility follow the AQI level); everything else is a quiet single reading column. No card grids, icon tiles, all-caps labels, middle-dot strings or gradient decoration. Type is self-hosted Anek (Ek Type, OFL) in `docs/fonts/`.
+- Chart colours (`--aqi-*` in `styles.css`) were checked with the dataviz palette validator; re-run it if you change them.

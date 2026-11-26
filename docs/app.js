@@ -2,37 +2,29 @@ import { getAirReport } from './lib/airQuality.js';
 import { buildRuleAdvice } from './lib/rules.js';
 import { parseLocation, parseProfile } from './lib/validate.js';
 import { normaliseAdvice } from './lib/advice.js';
+import { clock } from './lib/prompt.js';
 import { ADVICE_FUNCTION_URL, ADVICE_TIMEOUT_MS, AIR_DATA_FUNCTION_URL, REPORT_CACHE_MS } from './config.js';
 import { renderForecastChart } from './chart.js';
 
 /** Short, plain-language health message per AQI band. */
 const BAND_MESSAGE = {
-  good: 'Air is clean. Enjoy time outdoors.',
-  moderate: 'Acceptable for most. Very sensitive people should take it easy outdoors.',
-  sensitive: 'Children, elderly and people with lung or heart conditions should limit time outside.',
-  unhealthy: 'Everyone should cut down long or intense outdoor activity.',
-  'very-unhealthy': 'Health alert. Stay indoors as much as possible and keep windows closed.',
-  hazardous: 'Emergency conditions. Avoid going outside; seal your home and run purifiers.',
-  unknown: 'We could not read the current air quality.',
+  good: 'The air is clean. A good day to be outside.',
+  moderate: 'Fine for most people. Very sensitive people should take it easy outdoors.',
+  sensitive: 'Children, older people and anyone with lung or heart problems should limit time outside.',
+  unhealthy: 'Everyone should cut down long or hard activity outdoors.',
+  'very-unhealthy': 'Stay indoors as much as you can and keep the windows shut.',
+  hazardous: 'Avoid going out. Seal your home and run any purifiers you have.',
+  unknown: "We couldn't read the current air quality.",
 };
 
-const BAND_VAR = {
-  good: '--aqi-good',
-  moderate: '--aqi-moderate',
-  sensitive: '--aqi-sensitive',
-  unhealthy: '--aqi-unhealthy',
-  'very-unhealthy': '--aqi-very',
-  hazardous: '--aqi-hazard',
-};
-
-const COST_LABEL = { free: 'Free', low: 'Low cost', medium: 'Some cost' };
-const IMPACT_LABEL = { high: 'High impact', medium: 'Medium impact', low: 'Small win' };
+const COST_LABEL = { free: 'Free', low: 'Under ₹1,000', medium: 'Costs a bit more' };
+const IMPACT_LABEL = { high: 'Big difference.', medium: 'Some difference.', low: 'Small win.' };
 
 const POLLUTANTS = [
   ['pm2_5', 'PM2.5'],
   ['pm10', 'PM10'],
   ['nitrogen_dioxide', 'NO₂'],
-  ['ozone', 'O₃'],
+  ['ozone', 'Ozone'],
   ['carbon_monoxide', 'CO'],
 ];
 
@@ -44,28 +36,6 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text != null && text !== '') node.textContent = text;
   return node;
-}
-
-function icon(name) {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'icon');
-  svg.setAttribute('aria-hidden', 'true');
-  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-  use.setAttribute('href', `#i-${name}`);
-  svg.append(use);
-  return svg;
-}
-
-function hourLabel(iso) {
-  const h = Number(iso?.slice(11, 13));
-  if (!Number.isFinite(h)) return '';
-  return `${h % 12 || 12} ${h >= 12 ? 'PM' : 'AM'}`;
-}
-
-/** Position on the gauge: bands are drawn 1:1:1:1:2:4 over 0–500, matching AQI breakpoints. */
-function gaugePercent(aqi) {
-  const v = Math.max(0, Math.min(500, aqi));
-  return (v / 500) * 100;
 }
 
 /** Ask the Gemini-backed Edge Function for advice; null on any failure so we can fall back. */
@@ -87,39 +57,67 @@ async function fetchAiAdvice(report, profile) {
 
 /* ---------- Rendering ---------- */
 
-function badge(text, className = '') {
-  const li = el('li', `badge-chip ${className}`.trim(), text);
-  return li;
+/** Set the sky to the band's colours after a frame, so the transition from neutral plays once. */
+function paintSky(level) {
+  const sky = $('sky');
+  sky.dataset.level = 'unknown';
+  requestAnimationFrame(() => requestAnimationFrame(() => (sky.dataset.level = level)));
 }
 
-function renderSource(air) {
-  const s = air.source;
-  $('source-badges').replaceChildren(
-    badge(s.kind === 'measured' ? 'Measured' : 'Modelled', s.kind === 'measured' ? 'chip-measured' : 'chip-modelled'),
-    badge(`${s.label} · ${s.resolution}`),
-    ...(air.aqiEstimated ? [badge(air.aqiMethod)] : []),
-  );
+function renderReadings(air) {
+  const rows = [];
+  for (const [key, label] of POLLUTANTS) {
+    const value = air.pollutants[key];
+    if (value == null) continue;
+    const dd = el('dd', '', `${Math.round(value)} `);
+    dd.append(el('span', 'unit', 'µg/m³'));
+    if (key === 'pm2_5' && air.pm25WhoMultiple) dd.append(el('span', 'note', `${air.pm25WhoMultiple} times the WHO daily limit`));
+    rows.push(el('dt', '', label), dd);
+  }
+  $('pollutants').replaceChildren(...rows);
+
+  const dominant = $('aqi-dominant');
+  dominant.hidden = !air.dominant;
+  dominant.textContent = air.dominant ? `Most of today's pollution is ${air.dominant.name}.` : '';
+
   const local = $('aqi-local');
   local.hidden = !air.localIndex;
-  if (air.localIndex) local.textContent = `Local index ${air.localIndex.name}: ${air.localIndex.aqi}, ${air.localIndex.category}`;
+  if (air.localIndex) {
+    const who = air.localIndex.code === 'ind_cpcb' ? "India's official index (NAQI)" : `The local index, ${air.localIndex.name},`;
+    local.textContent = `${who} reads ${air.localIndex.aqi}: ${air.localIndex.category.toLowerCase()}.`;
+  } else {
+    local.textContent = '';
+  }
+}
+
+function renderSourceNote(air) {
+  const s = air.source;
+  const when = air.time ? ` Updated ${clock(air.time)} local time.` : '';
+  const method = air.aqiEstimated ? ' The US AQI is worked out from PM2.5 with the US EPA formula.' : '';
   $('data-note').textContent =
     s.provider === 'google'
-      ? 'Estimated for a 500 m grid cell around this location. Nearby streets can differ, especially next to busy roads.'
-      : 'Estimated for a grid cell about 45 km wide, so neighbourhoods within a city all show similar values. Treat it as a city-wide guide.';
+      ? `A model estimate from the Google Air Quality API for a 500 m area around this place, not a sensor reading. Streets next to heavy traffic can be worse.${method}${when}`
+      : `A model estimate from the CAMS global forecast (via Open-Meteo) for an area about 45 km wide, so every neighbourhood in a city shows similar numbers. Treat it as a city-wide guide.${method}${when}`;
 }
 
-function renderWeather(w, best) {
-  const line = $('weather-line');
+function renderForecastText(air, weather) {
+  const o = air.outlook;
+  const best = air.cleanestHours.find((h) => h.aqi === o?.bestAqi);
+  $('hours-note').textContent =
+    o?.improves && best
+      ? `The cleanest hour ahead is around ${clock(best.time)}, when the AQI should drop to about ${best.aqi}. Plan errands and airing out for then.`
+      : "The air isn't expected to get much better in the next day, so keep time outside short.";
+
   const parts = [];
-  if (typeof w?.temperature === 'number') parts.push(`${Math.round(w.temperature)}°C`);
-  if (typeof w?.wind === 'number') parts.push(`wind ${Math.round(w.wind)} km/h now`);
-  if (typeof w?.windAtBest === 'number' && best) parts.push(`${Math.round(w.windAtBest)} km/h around ${hourLabel(best.time)}`);
-  if (typeof w?.rainChanceMax24 === 'number' && w.rainChanceMax24 >= 20) parts.push(`up to ${w.rainChanceMax24}% chance of rain`);
+  if (typeof weather?.wind === 'number') parts.push(`wind is ${Math.round(weather.wind)} km/h now`);
+  if (typeof weather?.windAtBest === 'number' && best) parts.push(`${Math.round(weather.windAtBest)} km/h around ${clock(best.time)}`);
+  if (typeof weather?.rainChanceMax24 === 'number' && weather.rainChanceMax24 >= 20) parts.push(`there's up to a ${weather.rainChanceMax24}% chance of rain`);
+  const line = $('weather-line');
   line.hidden = parts.length === 0;
-  line.textContent = parts.length ? `Weather: ${parts.join(' · ')}. Wind and rain help clear smog.` : '';
+  line.textContent = parts.length ? `Wind and rain help clear smog: ${parts.join(', ')}.` : '';
 }
 
-/** Last chart inputs, so the chart can be drawn once its card is visible (and redrawn on resize). */
+/** Last chart inputs, so the chart can be drawn once visible and redrawn on resize. */
 let lastChart = null;
 function drawChart() {
   if (!lastChart) return;
@@ -129,49 +127,15 @@ function drawChart() {
 
 function renderAir({ place, air, weather, weatherHours }) {
   const level = air.category.level;
-  const card = $('aqi-card');
-  card.style.setProperty('--aqi', `var(${BAND_VAR[level] ?? '--color-primary'})`);
-
   $('aqi-place').textContent = place.name;
-  $('aqi-time').textContent = air.time ? `Updated ${hourLabel(air.time)} local time` : '';
   $('aqi-number').textContent = air.usAqi;
-  const dominant = $('aqi-dominant');
-  dominant.hidden = !air.dominant;
-  dominant.textContent = air.dominant ? `Main pollutant: ${air.dominant.name}` : '';
   $('aqi-label').textContent = air.category.label;
   $('aqi-msg').textContent = BAND_MESSAGE[level] ?? '';
-
-  $('gauge-marker').style.setProperty('--pos', `${gaugePercent(air.usAqi)}%`);
-  $('gauge').setAttribute('aria-label', `AQI ${air.usAqi} on a scale of 0 to 500: ${air.category.label}`);
-
-  const tiles = POLLUTANTS.filter(([key]) => air.pollutants[key] != null).map(([key, label]) => {
-    const wrap = el('div', 'tile');
-    const dd = el('dd', '', `${Math.round(air.pollutants[key])} `);
-    dd.append(el('small', '', 'µg/m³'));
-    if (key === 'pm2_5' && air.pm25WhoMultiple) {
-      dd.append(el('span', 'note', `${air.pm25WhoMultiple}× WHO daily limit`));
-    }
-    wrap.append(el('dt', '', label), dd);
-    return wrap;
-  });
-  $('pollutants').replaceChildren(...tiles);
-
-  $('hours-block').hidden = air.cleanestHours.length === 0;
-  $('hours').replaceChildren(
-    ...air.cleanestHours.map((h) => {
-      const li = el('li', '', `${hourLabel(h.time)} `);
-      li.append(el('span', '', `AQI ${h.aqi}`));
-      return li;
-    }),
-  );
-  renderSource(air);
-  const best = air.cleanestHours.find((h) => h.aqi === air.outlook?.bestAqi);
-  renderWeather(weather, best);
+  paintSky(level);
+  renderReadings(air);
+  renderSourceNote(air);
+  renderForecastText(air, weather);
   lastChart = { forecast: air.forecast ?? [], best: air.cleanestHours, weatherHours };
-  const o = air.outlook;
-  $('hours-note').textContent = o?.improves
-    ? `About ${o.drop} points cleaner than now. Plan errands and airing out for then.`
-    : 'No big improvement expected in the next 24 hours.';
 }
 
 function renderAdvice(advice, source) {
@@ -184,7 +148,9 @@ function renderAdvice(advice, source) {
   $('routine').replaceChildren(
     ...advice.routine.map((r) => {
       const li = el('li');
-      li.append(el('span', 'when', r.time), el('span', 'what', r.action), el('p', 'why', r.why));
+      const body = el('div');
+      body.append(el('span', 'what', r.action), el('p', 'why', r.why));
+      li.append(el('span', 'when', r.time), body);
       return li;
     }),
   );
@@ -192,8 +158,8 @@ function renderAdvice(advice, source) {
   $('indoor').replaceChildren(
     ...advice.indoor.map((t) => {
       const li = el('li');
-      const head = el('div', 'item-head');
-      head.append(el('span', 'what', t.tip), el('span', `badge badge-cost-${t.cost}`, COST_LABEL[t.cost] ?? ''));
+      const head = el('p', 'tip-head');
+      head.append(el('span', 'what', t.tip), el('span', 'cost', COST_LABEL[t.cost] ?? ''));
       li.append(head, el('p', 'why', t.why));
       return li;
     }),
@@ -202,19 +168,17 @@ function renderAdvice(advice, source) {
   $('alternatives').replaceChildren(
     ...advice.alternatives.map((a) => {
       const li = el('li');
-      const row = el('div', 'swap-row');
-      row.append(el('span', 'swap-from', a.instead), icon('arrow'), el('span', 'swap-to', a.try));
       const impact = el('p', 'impact');
-      impact.append(el('strong', `level-${a.impactLevel}`, `${IMPACT_LABEL[a.impactLevel] ?? 'Impact'}`), el('span', '', a.impact));
-      li.append(row, impact);
+      impact.append(el('span', 'level', `${IMPACT_LABEL[a.impactLevel] ?? ''} `), document.createTextNode(a.impact));
+      li.append(el('span', 'from', `Instead of: ${a.instead}`), el('span', 'to', a.try), impact);
       return li;
     }),
   );
 
   $('source').textContent =
     source === 'gemini'
-      ? 'Plan generated by Gemini from live air data.'
-      : 'Plan generated by built-in guidance rules from live air data.';
+      ? 'This plan was written by Google Gemini from the numbers above, and checked so it only quotes them.'
+      : "This plan comes from built-in safety rules because the AI planner wasn't available.";
 }
 
 /* ---------- App ---------- */
@@ -225,8 +189,7 @@ function init() {
   const submit = $('submit');
   const submitText = submit.querySelector('.btn-text');
   const results = $('results');
-  const skeleton = $('skeleton');
-  const personalise = form.querySelector('.personalise');
+  const loading = $('skeleton');
   let coords = null;
   let busy = false;
   const reportCache = new Map();
@@ -240,9 +203,6 @@ function init() {
     reportCache.set(key, { at: Date.now(), report });
     return report;
   }
-
-  // Collapse the optional section on small screens so the search is the first thing people see.
-  if (window.matchMedia('(max-width: 480px)').matches) personalise.open = false;
 
   const showFieldError = (msg) => {
     $('city-error').textContent = msg;
@@ -258,11 +218,9 @@ function init() {
     busy = on;
     submit.disabled = on;
     results.setAttribute('aria-busy', String(on));
-    const spinner = submit.querySelector('.spinner');
-    if (on && !spinner) submit.prepend(el('span', 'spinner'));
-    if (!on && spinner) spinner.remove();
-    submit.querySelector('.icon').hidden = on;
-    submitText.textContent = label ?? 'Get my clean-air plan';
+    submitText.textContent = on ? 'Checking…' : 'Check the air';
+    loading.hidden = !on;
+    if (label) $('loading-text').textContent = label;
   }
 
   function readProfile() {
@@ -292,19 +250,17 @@ function init() {
     }
     const profile = readProfile();
 
-    setBusy(true, 'Checking the air…');
     results.hidden = true;
-    skeleton.hidden = false;
-    skeleton.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setBusy(true, 'Checking the air…');
 
     try {
       const report = await loadReport(location);
       renderAir(report);
-      setBusy(true, 'Building your plan…');
+      setBusy(true, 'Writing your plan…');
       const aiAdvice = await fetchAiAdvice(report, profile);
       renderAdvice(aiAdvice ?? buildRuleAdvice(report, profile), aiAdvice ? 'gemini' : 'rules');
 
-      skeleton.hidden = true;
+      setBusy(false);
       results.hidden = false;
       drawChart();
       results.focus({ preventScroll: true });
@@ -316,10 +272,8 @@ function init() {
         window.history.replaceState(null, '', url);
       }
     } catch (err) {
-      skeleton.hidden = true;
-      showError(err.message || 'Could not reach the air quality service. Please try again.');
-    } finally {
       setBusy(false);
+      showError(err.message || "Couldn't reach the air quality service. Check your connection and try again.");
     }
   }
 
@@ -333,7 +287,7 @@ function init() {
     showFieldError('');
   });
 
-  form.querySelectorAll('.quick-city').forEach((btn) => {
+  form.querySelectorAll('.quick-city[data-city]').forEach((btn) => {
     btn.addEventListener('click', () => {
       cityInput.value = btn.dataset.city;
       coords = null;
@@ -343,17 +297,17 @@ function init() {
 
   $('locate').addEventListener('click', () => {
     if (!navigator.geolocation) {
-      showFieldError('Location is not available in this browser. Please type your city.');
+      showFieldError("This browser can't share your location. Type your city instead.");
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-        cityInput.value = 'My location';
+        cityInput.value = 'Where I am';
         showFieldError('');
         run();
       },
-      () => showFieldError('Could not get your location. Please type your city instead.'),
+      () => showFieldError("Couldn't get your location. Type your city instead."),
       { timeout: 10000, maximumAge: 600000 },
     );
   });
@@ -371,10 +325,10 @@ function init() {
       await navigator.clipboard.writeText(window.location.href);
       btn.textContent = 'Link copied';
     } catch {
-      btn.textContent = 'Copy failed';
+      btn.textContent = "Couldn't copy the link";
     }
     setTimeout(() => {
-      btn.textContent = 'Copy link to this city';
+      btn.textContent = 'Copy a link to this city';
     }, 2000);
   });
 
