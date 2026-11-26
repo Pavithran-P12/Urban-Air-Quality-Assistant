@@ -3,134 +3,223 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="AI assistant that turns live air-quality data into low-emission routines, indoor air hacks and sustainable swaps for your family.">
-  <title>Urban Air Quality Assistant</title>
+  <meta name="description" content="Live air quality plus a personal plan for your household: low-emission routines, indoor air hacks and greener swaps, explained.">
+  <meta name="theme-color" content="#f0f9ff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://geocoding-api.open-meteo.com https://air-quality-api.open-meteo.com https://wxlpbefrbxxbosjfeudk.supabase.co; base-uri 'self'; form-action 'self'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Urban Air Quality Assistant</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230369a1' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M3 8h11a3 3 0 1 0-3-3M3 12h16a3 3 0 1 1-3 3M3 16h8'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <script type="module" src="app.js"></script>
 </head>
 <body>
+  <!-- Icon sprite (decorative; every use is aria-hidden) -->
+  <svg width="0" height="0" class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-wind" viewBox="0 0 24 24"><path d="M3 8h11a3 3 0 1 0-3-3M3 12h16a3 3 0 1 1-3 3M3 16h8"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 1 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M5 19c0-9 6-14 15-14 0 9-5 15-14 15"/><path d="M5 19 13 11"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17.5v.01"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4V5z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></symbol>
+  </svg>
+
   <a class="skip-link" href="#main">Skip to content</a>
-  <header class="site-header">
-    <h1>Urban Air Quality Assistant</h1>
-    <p>Live air quality plus a plan for your household: when to go out, how to keep indoor air clean, and which swaps cut pollution.</p>
+
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <span class="brand">
+        <svg class="icon brand-icon" aria-hidden="true"><use href="#i-wind"/></svg>
+        <span>Urban Air</span>
+      </span>
+      <span class="topbar-note">Live data · AI guidance</span>
+    </div>
   </header>
 
-  <main id="main">
-    <form id="advice-form" class="card" novalidate>
-      <h2>Tell us about your day</h2>
+  <main id="main" class="wrap">
+    <section class="hero" aria-labelledby="hero-title">
+      <h1 id="hero-title">Breathe easier, <span class="accent">starting today</span></h1>
+      <p class="lede">Check the air where you live and get a simple plan for your family: when to step out, how to keep indoor air clean, and swaps that cut pollution.</p>
+    </section>
 
+    <form id="advice-form" class="panel" novalidate>
       <div class="field">
-        <label for="city">City</label>
-        <div class="row">
-          <input id="city" name="city" type="text" autocomplete="address-level2" placeholder="e.g. Delhi" maxlength="80" required aria-describedby="city-help">
-          <button type="button" id="locate" class="secondary">Use my location</button>
+        <label for="city" class="label">Your city</label>
+        <div class="search">
+          <svg class="icon search-icon" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="city" name="city" type="search" inputmode="search" autocomplete="address-level2"
+                 placeholder="Search a city, e.g. Delhi" maxlength="80" required aria-describedby="city-help city-error">
+          <button type="button" id="locate" class="btn btn-ghost" aria-label="Use my current location">
+            <svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg>
+            <span class="hide-sm">Near me</span>
+          </button>
         </div>
-        <p id="city-help" class="help">Type a city or share your location.</p>
+        <p id="city-error" class="field-error" role="alert" hidden></p>
+        <div class="quick" id="city-help">
+          <span class="quick-label">Try:</span>
+          <button type="button" class="quick-city" data-city="Delhi">Delhi</button>
+          <button type="button" class="quick-city" data-city="Mumbai">Mumbai</button>
+          <button type="button" class="quick-city" data-city="Kolkata">Kolkata</button>
+          <button type="button" class="quick-city" data-city="Chennai">Chennai</button>
+          <button type="button" class="quick-city" data-city="Bengaluru">Bengaluru</button>
+        </div>
       </div>
 
-      <fieldset class="field">
-        <legend>Who lives with you? <span class="help">(choose any)</span></legend>
-        <div class="chips">
-          <label><input type="checkbox" name="household" value="children"> Children</label>
-          <label><input type="checkbox" name="household" value="elderly"> Elderly</label>
-          <label><input type="checkbox" name="household" value="pregnant"> Pregnant</label>
-          <label><input type="checkbox" name="household" value="asthma-or-copd"> Asthma / COPD</label>
-          <label><input type="checkbox" name="household" value="heart-condition"> Heart condition</label>
-          <label><input type="checkbox" name="household" value="pets"> Pets</label>
-        </div>
-      </fieldset>
+      <details class="personalise" open>
+        <summary>
+          <svg class="icon" aria-hidden="true"><use href="#i-users"/></svg>
+          <span>Personalise for your household</span>
+          <span class="summary-hint">optional</span>
+        </summary>
 
-      <div class="grid">
+        <fieldset class="group">
+          <legend class="label">Who needs extra care?</legend>
+          <div class="chips">
+            <label class="chip"><input type="checkbox" name="household" value="children"><span>Children</span></label>
+            <label class="chip"><input type="checkbox" name="household" value="elderly"><span>Elderly</span></label>
+            <label class="chip"><input type="checkbox" name="household" value="pregnant"><span>Pregnant</span></label>
+            <label class="chip"><input type="checkbox" name="household" value="asthma-or-copd"><span>Asthma / COPD</span></label>
+            <label class="chip"><input type="checkbox" name="household" value="heart-condition"><span>Heart condition</span></label>
+            <label class="chip"><input type="checkbox" name="household" value="pets"><span>Pets</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="group">
+          <legend class="label">How do you usually commute?</legend>
+          <div class="chips">
+            <label class="chip"><input type="radio" name="commute" value="public-transport" checked><span>Metro / bus</span></label>
+            <label class="chip"><input type="radio" name="commute" value="car"><span>Car</span></label>
+            <label class="chip"><input type="radio" name="commute" value="two-wheeler"><span>Two-wheeler</span></label>
+            <label class="chip"><input type="radio" name="commute" value="walk"><span>Walk</span></label>
+            <label class="chip"><input type="radio" name="commute" value="cycle"><span>Cycle</span></label>
+            <label class="chip"><input type="radio" name="commute" value="work-from-home"><span>Work from home</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="group">
+          <legend class="label">What do you cook with?</legend>
+          <div class="chips">
+            <label class="chip"><input type="radio" name="cooking" value="lpg" checked><span>LPG</span></label>
+            <label class="chip"><input type="radio" name="cooking" value="piped-gas"><span>Piped gas</span></label>
+            <label class="chip"><input type="radio" name="cooking" value="induction"><span>Induction</span></label>
+            <label class="chip"><input type="radio" name="cooking" value="electric"><span>Electric</span></label>
+            <label class="chip"><input type="radio" name="cooking" value="biomass"><span>Wood / biomass</span></label>
+            <label class="chip"><input type="radio" name="cooking" value="kerosene"><span>Kerosene</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="group">
+          <legend class="label">How do you heat your home?</legend>
+          <div class="chips">
+            <label class="chip"><input type="radio" name="heating" value="none" checked><span>No heating</span></label>
+            <label class="chip"><input type="radio" name="heating" value="electric"><span>Electric</span></label>
+            <label class="chip"><input type="radio" name="heating" value="gas"><span>Gas</span></label>
+            <label class="chip"><input type="radio" name="heating" value="wood"><span>Wood</span></label>
+            <label class="chip"><input type="radio" name="heating" value="coal"><span>Coal</span></label>
+            <label class="chip"><input type="radio" name="heating" value="kerosene"><span>Kerosene</span></label>
+          </div>
+        </fieldset>
+
+        <label class="switch">
+          <input type="checkbox" id="hasPurifier" name="hasPurifier" role="switch">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>I have an air purifier</span>
+        </label>
+
         <div class="field">
-          <label for="commute">Main commute</label>
-          <select id="commute" name="commute">
-            <option value="public-transport">Public transport</option>
-            <option value="car">Car</option>
-            <option value="two-wheeler">Two-wheeler</option>
-            <option value="walk">Walk</option>
-            <option value="cycle">Cycle</option>
-            <option value="work-from-home">Work from home</option>
-          </select>
+          <label for="question" class="label">Ask anything <span class="summary-hint">optional</span></label>
+          <textarea id="question" name="question" rows="2" maxlength="300"
+                    placeholder="e.g. Is it safe for my kids to play outside after school?"></textarea>
         </div>
-        <div class="field">
-          <label for="cooking">Cooking fuel</label>
-          <select id="cooking" name="cooking">
-            <option value="lpg">LPG</option>
-            <option value="piped-gas">Piped gas</option>
-            <option value="induction">Induction</option>
-            <option value="electric">Electric</option>
-            <option value="biomass">Wood / biomass</option>
-            <option value="kerosene">Kerosene</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="heating">Heating</label>
-          <select id="heating" name="heating">
-            <option value="none">None</option>
-            <option value="electric">Electric heater</option>
-            <option value="gas">Gas heater</option>
-            <option value="wood">Wood</option>
-            <option value="coal">Coal</option>
-            <option value="kerosene">Kerosene</option>
-          </select>
-        </div>
-      </div>
+      </details>
 
-      <div class="field">
-        <label class="inline"><input type="checkbox" id="hasPurifier" name="hasPurifier"> I have an air purifier</label>
-      </div>
-
-      <div class="field">
-        <label for="question">Anything specific? <span class="help">(optional)</span></label>
-        <textarea id="question" name="question" rows="2" maxlength="300" placeholder="e.g. Is it safe for my kids to play outside after school?"></textarea>
-      </div>
-
-      <button type="submit" id="submit">Get my plan</button>
-      <p id="form-error" class="error" role="alert" hidden></p>
+      <button type="submit" id="submit" class="btn btn-primary btn-block">
+        <svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg>
+        <span class="btn-text">Get my clean-air plan</span>
+      </button>
+      <p id="form-error" class="banner banner-error" role="alert" hidden></p>
     </form>
 
-    <section id="results" aria-live="polite" aria-busy="false" hidden>
-      <div id="aqi-card" class="card aqi">
-        <p class="aqi-place" id="aqi-place"></p>
-        <p class="aqi-value"><span id="aqi-number"></span> <span class="aqi-unit">US AQI</span></p>
-        <p class="aqi-label" id="aqi-label"></p>
-        <dl class="pollutants" id="pollutants"></dl>
-        <p class="help" id="aqi-best"></p>
-      </div>
+    <!-- Loading skeleton -->
+    <div id="skeleton" class="skeleton" hidden aria-hidden="true">
+      <div class="sk sk-hero"></div>
+      <div class="sk sk-row"></div>
+      <div class="sk sk-card"></div>
+      <div class="sk sk-card"></div>
+    </div>
 
-      <div class="card">
-        <h2>Today in brief</h2>
-        <p id="summary"></p>
-        <p id="risk" class="risk"></p>
-        <div id="answer-block" hidden>
-          <h3>Your question</h3>
+    <section id="results" class="results" aria-live="polite" aria-busy="false" hidden tabindex="-1" aria-labelledby="aqi-place">
+      <article id="aqi-card" class="aqi-card">
+        <div class="aqi-head">
+          <p class="aqi-place"><svg class="icon" aria-hidden="true"><use href="#i-pin"/></svg><span id="aqi-place"></span></p>
+          <p class="aqi-time" id="aqi-time"></p>
+        </div>
+        <div class="aqi-main">
+          <p class="aqi-value"><span id="aqi-number"></span><span class="aqi-unit">US AQI</span></p>
+          <div>
+            <p class="aqi-badge" id="aqi-label"></p>
+            <p class="aqi-msg" id="aqi-msg"></p>
+          </div>
+        </div>
+        <div class="gauge" role="img" id="gauge" aria-label="">
+          <div class="gauge-bar"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+          <span class="gauge-marker" id="gauge-marker"></span>
+          <div class="gauge-scale" aria-hidden="true"><span>0</span><span>100</span><span>200</span><span>300</span><span>500</span></div>
+        </div>
+        <dl class="tiles" id="pollutants"></dl>
+        <div class="hours" id="hours-block">
+          <p class="hours-title"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>Cleanest hours ahead</p>
+          <ul class="hours-list" id="hours"></ul>
+        </div>
+      </article>
+
+      <article class="card">
+        <h2 class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-wind"/></svg>Today in brief</h2>
+        <p id="summary" class="summary"></p>
+        <div class="callout" id="risk-block">
+          <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+          <p id="risk"></p>
+        </div>
+        <div id="answer-block" class="answer" hidden>
+          <h3 class="mini-title"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Your question</h3>
           <p id="answer"></p>
         </div>
-      </div>
+      </article>
 
-      <div class="card">
-        <h2>Low-emission daily routine</h2>
-        <ol id="routine" class="items"></ol>
-      </div>
+      <article class="card">
+        <h2 class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg>Your low-exposure day</h2>
+        <ol id="routine" class="timeline"></ol>
+      </article>
 
-      <div class="card">
-        <h2>Indoor air hacks</h2>
-        <ul id="indoor" class="items"></ul>
-      </div>
+      <article class="card">
+        <h2 class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg>Indoor air hacks</h2>
+        <ul id="indoor" class="tips"></ul>
+      </article>
 
-      <div class="card">
-        <h2>Sustainable swaps and their impact</h2>
-        <ul id="alternatives" class="items"></ul>
-      </div>
+      <article class="card">
+        <h2 class="card-title"><svg class="icon" aria-hidden="true"><use href="#i-leaf"/></svg>Greener swaps and their impact</h2>
+        <ul id="alternatives" class="swaps"></ul>
+      </article>
 
-      <p class="help source" id="source"></p>
+      <div class="result-actions">
+        <button type="button" id="share" class="btn btn-ghost">Copy link to this city</button>
+        <button type="button" id="again" class="btn btn-ghost">Check another city</button>
+      </div>
+      <p class="source" id="source"></p>
     </section>
   </main>
 
-  <footer class="site-footer">
-    <p>Air data: <a href="https://open-meteo.com/en/docs/air-quality-api" rel="noopener">Open-Meteo Air Quality API</a> (CAMS). Advice is general guidance, not medical advice.</p>
+  <footer class="footer">
+    <div class="wrap">
+      <p>Air data from <a href="https://open-meteo.com/en/docs/air-quality-api" rel="noopener">Open-Meteo</a> (Copernicus CAMS). AI guidance by Google Gemini.</p>
+      <p>General guidance, not medical advice. If anyone struggles to breathe, see a doctor.</p>
+    </div>
   </footer>
 </body>
 </html>

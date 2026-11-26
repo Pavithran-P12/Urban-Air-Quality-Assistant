@@ -3,10 +3,67 @@ import { buildRuleAdvice } from './lib/rules.js';
 import { parseLocation, parseProfile } from './lib/validate.js';
 import { ADVICE_FUNCTION_URL, ADVICE_TIMEOUT_MS } from './config.js';
 
-/**
- * Ask the Gemini-backed Edge Function for advice. Returns null on any failure so the
- * caller can fall back to the built-in rules engine.
- */
+/** Short, plain-language health message per AQI band. */
+const BAND_MESSAGE = {
+  good: 'Air is clean. Enjoy time outdoors.',
+  moderate: 'Acceptable for most. Very sensitive people should take it easy outdoors.',
+  sensitive: 'Children, elderly and people with lung or heart conditions should limit time outside.',
+  unhealthy: 'Everyone should cut down long or intense outdoor activity.',
+  'very-unhealthy': 'Health alert. Stay indoors as much as possible and keep windows closed.',
+  hazardous: 'Emergency conditions. Avoid going outside; seal your home and run purifiers.',
+  unknown: 'We could not read the current air quality.',
+};
+
+const BAND_VAR = {
+  good: '--aqi-good',
+  moderate: '--aqi-moderate',
+  sensitive: '--aqi-sensitive',
+  unhealthy: '--aqi-unhealthy',
+  'very-unhealthy': '--aqi-very',
+  hazardous: '--aqi-hazard',
+};
+
+const POLLUTANTS = [
+  ['pm2_5', 'PM2.5'],
+  ['pm10', 'PM10'],
+  ['nitrogen_dioxide', 'NO₂'],
+  ['ozone', 'O₃'],
+  ['carbon_monoxide', 'CO'],
+];
+
+const $ = (id) => document.getElementById(id);
+
+/** Create an element with optional class and text (always textContent, never HTML). */
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null && text !== '') node.textContent = text;
+  return node;
+}
+
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `#i-${name}`);
+  svg.append(use);
+  return svg;
+}
+
+function hourLabel(iso) {
+  const h = Number(iso?.slice(11, 13));
+  if (!Number.isFinite(h)) return '';
+  return `${h % 12 || 12} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
+/** Position on the gauge: bands are drawn 1:1:1:1:2:4 over 0–500, matching AQI breakpoints. */
+function gaugePercent(aqi) {
+  const v = Math.max(0, Math.min(500, aqi));
+  return (v / 500) * 100;
+}
+
+/** Ask the Gemini-backed Edge Function for advice; null on any failure so we can fall back. */
 async function fetchAiAdvice(report, profile) {
   try {
     const res = await fetch(ADVICE_FUNCTION_URL, {
@@ -23,159 +80,240 @@ async function fetchAiAdvice(report, profile) {
   }
 }
 
-{
-  const $ = (id) => document.getElementById(id);
-  const form = $('advice-form');
-  const submit = $('submit');
-  const errorBox = $('form-error');
-  const results = $('results');
-  let coords = null;
+/* ---------- Rendering ---------- */
 
-  const POLLUTANT_LABELS = {
-    pm2_5: 'PM2.5',
-    pm10: 'PM10',
-    nitrogen_dioxide: 'NO₂',
-    ozone: 'O₃',
-    carbon_monoxide: 'CO',
+function renderAir({ place, air }) {
+  const level = air.category.level;
+  const card = $('aqi-card');
+  card.style.setProperty('--aqi', `var(${BAND_VAR[level] ?? '--color-primary'})`);
+
+  $('aqi-place').textContent = place.name;
+  $('aqi-time').textContent = air.time ? `Updated ${hourLabel(air.time)} local time` : '';
+  $('aqi-number').textContent = air.usAqi;
+  $('aqi-label').textContent = air.category.label;
+  $('aqi-msg').textContent = BAND_MESSAGE[level] ?? '';
+
+  $('gauge-marker').style.setProperty('--pos', `${gaugePercent(air.usAqi)}%`);
+  $('gauge').setAttribute('aria-label', `AQI ${air.usAqi} on a scale of 0 to 500: ${air.category.label}`);
+
+  const tiles = POLLUTANTS.filter(([key]) => air.pollutants[key] != null).map(([key, label]) => {
+    const wrap = el('div', 'tile');
+    const dd = el('dd', '', `${Math.round(air.pollutants[key])} `);
+    dd.append(el('small', '', 'µg/m³'));
+    if (key === 'pm2_5' && air.pm25WhoMultiple) {
+      dd.append(el('span', 'note', `${air.pm25WhoMultiple}× WHO daily limit`));
+    }
+    wrap.append(el('dt', '', label), dd);
+    return wrap;
+  });
+  $('pollutants').replaceChildren(...tiles);
+
+  $('hours-block').hidden = air.cleanestHours.length === 0;
+  $('hours').replaceChildren(
+    ...air.cleanestHours.map((h) => {
+      const li = el('li', '', `${hourLabel(h.time)} `);
+      li.append(el('span', '', `AQI ${h.aqi}`));
+      return li;
+    }),
+  );
+}
+
+function renderAdvice(advice, source) {
+  $('summary').textContent = advice.summary;
+  $('risk').textContent = advice.riskNote;
+  $('risk-block').hidden = !advice.riskNote;
+  $('answer-block').hidden = !advice.answer;
+  $('answer').textContent = advice.answer;
+
+  $('routine').replaceChildren(
+    ...advice.routine.map((r) => {
+      const li = el('li');
+      li.append(el('span', 'when', r.time), el('span', 'what', r.action), el('p', 'why', r.why));
+      return li;
+    }),
+  );
+
+  $('indoor').replaceChildren(
+    ...advice.indoor.map((t) => {
+      const li = el('li');
+      li.append(el('span', 'what', t.tip), el('p', 'why', t.why));
+      return li;
+    }),
+  );
+
+  $('alternatives').replaceChildren(
+    ...advice.alternatives.map((a) => {
+      const li = el('li');
+      const row = el('div', 'swap-row');
+      row.append(el('span', 'swap-from', a.instead), icon('arrow'), el('span', 'swap-to', a.try));
+      const impact = el('p', 'impact');
+      impact.append(el('strong', '', 'Impact'), el('span', '', a.impact));
+      li.append(row, impact);
+      return li;
+    }),
+  );
+
+  $('source').textContent =
+    source === 'gemini'
+      ? 'Plan generated by Gemini from live air data.'
+      : 'Plan generated by built-in guidance rules from live air data.';
+}
+
+/* ---------- App ---------- */
+
+function init() {
+  const form = $('advice-form');
+  const cityInput = $('city');
+  const submit = $('submit');
+  const submitText = submit.querySelector('.btn-text');
+  const results = $('results');
+  const skeleton = $('skeleton');
+  const personalise = form.querySelector('.personalise');
+  let coords = null;
+  let busy = false;
+
+  // Collapse the optional section on small screens so the search is the first thing people see.
+  if (window.matchMedia('(max-width: 480px)').matches) personalise.open = false;
+
+  const showFieldError = (msg) => {
+    $('city-error').textContent = msg;
+    $('city-error').hidden = !msg;
+    cityInput.setAttribute('aria-invalid', msg ? 'true' : 'false');
+  };
+  const showError = (msg) => {
+    $('form-error').textContent = msg;
+    $('form-error').hidden = !msg;
   };
 
-  function showError(message) {
-    errorBox.textContent = message;
-    errorBox.hidden = !message;
+  function setBusy(on, label) {
+    busy = on;
+    submit.disabled = on;
+    results.setAttribute('aria-busy', String(on));
+    const spinner = submit.querySelector('.spinner');
+    if (on && !spinner) submit.prepend(el('span', 'spinner'));
+    if (!on && spinner) spinner.remove();
+    submit.querySelector('.icon').hidden = on;
+    submitText.textContent = label ?? 'Get my clean-air plan';
   }
 
-  function el(tag, text, className) {
-    const node = document.createElement(tag);
-    if (text) node.textContent = text;
-    if (className) node.className = className;
-    return node;
+  function readProfile() {
+    const value = (name) => form.querySelector(`input[name="${name}"]:checked`)?.value;
+    return parseProfile({
+      household: [...form.querySelectorAll('input[name="household"]:checked')].map((i) => i.value),
+      commute: value('commute'),
+      cooking: value('cooking'),
+      heating: value('heating'),
+      hasPurifier: $('hasPurifier').checked,
+      question: $('question').value,
+    });
   }
 
-  function fillList(listId, items, render) {
-    const list = $(listId);
-    list.replaceChildren(...items.map(render));
-  }
+  async function run() {
+    if (busy) return;
+    showError('');
+    showFieldError('');
 
-  function hour(iso) {
-    const h = Number(iso.slice(11, 13));
-    return `${h % 12 || 12} ${h >= 12 ? 'PM' : 'AM'}`;
-  }
-
-  function render(data) {
-    const { place, air, advice, source } = data;
-
-    $('aqi-place').textContent = place.name;
-    $('aqi-number').textContent = air.usAqi;
-    $('aqi-label').textContent = air.category.label;
-    $('aqi-card').style.setProperty('--aqi-color', air.category.color);
-
-    const dl = $('pollutants');
-    dl.replaceChildren();
-    for (const [key, label] of Object.entries(POLLUTANT_LABELS)) {
-      const value = air.pollutants[key];
-      if (value == null) continue;
-      const wrap = el('div');
-      wrap.append(el('dt', label), el('dd', `${Math.round(value)} µg/m³`));
-      dl.append(wrap);
+    let location;
+    try {
+      location = parseLocation(coords ?? { city: cityInput.value });
+    } catch (err) {
+      showFieldError(err.message);
+      cityInput.focus();
+      return;
     }
-    $('aqi-best').textContent = air.cleanestHours.length
-      ? `Cleanest hours ahead: ${air.cleanestHours.map((h) => `${hour(h.time)} (AQI ${h.aqi})`).join(', ')}`
-      : '';
+    const profile = readProfile();
 
-    $('summary').textContent = advice.summary;
-    $('risk').textContent = advice.riskNote;
-    $('answer-block').hidden = !advice.answer;
-    $('answer').textContent = advice.answer;
+    setBusy(true, 'Checking the air…');
+    results.hidden = true;
+    skeleton.hidden = false;
+    skeleton.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-    fillList('routine', advice.routine, (r) => {
-      const li = el('li');
-      li.append(el('strong', r.time), el('span', ` ${r.action}`), el('p', r.why, 'why'));
-      return li;
-    });
-    fillList('indoor', advice.indoor, (t) => {
-      const li = el('li');
-      li.append(el('span', t.tip), el('p', t.why, 'why'));
-      return li;
-    });
-    fillList('alternatives', advice.alternatives, (a) => {
-      const li = el('li');
-      li.append(el('span', `Instead of ${a.instead.toLowerCase()}, try ${a.try}.`), el('p', a.impact, 'why'));
-      return li;
-    });
+    try {
+      const report = await getAirReport(location);
+      renderAir(report);
+      setBusy(true, 'Building your plan…');
+      const aiAdvice = await fetchAiAdvice(report, profile);
+      renderAdvice(aiAdvice ?? buildRuleAdvice(report, profile), aiAdvice ? 'gemini' : 'rules');
 
-    $('source').textContent =
-      source === 'gemini' ? 'Plan generated by Gemini using live air data.' : 'Plan generated by built-in guidance rules using live air data.';
+      skeleton.hidden = true;
+      results.hidden = false;
+      results.focus({ preventScroll: true });
+      results.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-    results.hidden = false;
-    $('aqi-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (location.city) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('city', location.city);
+        window.history.replaceState(null, '', url);
+      }
+    } catch (err) {
+      skeleton.hidden = true;
+      showError(err.message || 'Could not reach the air quality service. Please try again.');
+    } finally {
+      setBusy(false);
+    }
   }
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    run();
+  });
+
+  cityInput.addEventListener('input', () => {
+    coords = null;
+    showFieldError('');
+  });
+
+  form.querySelectorAll('.quick-city').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      cityInput.value = btn.dataset.city;
+      coords = null;
+      run();
+    });
+  });
 
   $('locate').addEventListener('click', () => {
     if (!navigator.geolocation) {
-      showError('Location is not supported in this browser. Please type your city.');
+      showFieldError('Location is not available in this browser. Please type your city.');
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-        $('city').value = 'My location';
-        showError('');
+        cityInput.value = 'My location';
+        showFieldError('');
+        run();
       },
-      () => showError('Could not get your location. Please type your city.'),
+      () => showFieldError('Could not get your location. Please type your city instead.'),
       { timeout: 10000, maximumAge: 600000 },
     );
   });
 
-  $('city').addEventListener('input', () => {
+  $('again').addEventListener('click', () => {
+    cityInput.value = '';
     coords = null;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    cityInput.focus({ preventScroll: true });
   });
 
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    showError('');
-
-    const city = $('city').value.trim();
-    if (!coords && city.length < 2) {
-      showError('Please enter your city or use your location.');
-      $('city').focus();
-      return;
-    }
-
-    let location;
-    let profile;
+  $('share').addEventListener('click', async () => {
+    const btn = $('share');
     try {
-      location = parseLocation(coords ?? { city });
-      profile = parseProfile({
-        household: [...form.querySelectorAll('input[name="household"]:checked')].map((i) => i.value),
-        commute: $('commute').value,
-        cooking: $('cooking').value,
-        heating: $('heating').value,
-        hasPurifier: $('hasPurifier').checked,
-        question: $('question').value,
-      });
-    } catch (err) {
-      showError(err.message);
-      return;
+      await navigator.clipboard.writeText(window.location.href);
+      btn.textContent = 'Link copied';
+    } catch {
+      btn.textContent = 'Copy failed';
     }
-
-    submit.disabled = true;
-    submit.textContent = 'Checking the air…';
-    results.setAttribute('aria-busy', 'true');
-    try {
-      const report = await getAirReport(location);
-      submit.textContent = 'Building your plan…';
-      const aiAdvice = await fetchAiAdvice(report, profile);
-      render({
-        ...report,
-        advice: aiAdvice ?? buildRuleAdvice(report, profile),
-        source: aiAdvice ? 'gemini' : 'rules',
-      });
-    } catch (err) {
-      showError(err.message || 'Could not reach the server. Please try again.');
-    } finally {
-      submit.disabled = false;
-      submit.textContent = 'Get my plan';
-      results.setAttribute('aria-busy', 'false');
-    }
+    setTimeout(() => {
+      btn.textContent = 'Copy link to this city';
+    }, 2000);
   });
+
+  // Deep link: ?city=Delhi runs straight away.
+  const fromUrl = new URLSearchParams(window.location.search).get('city');
+  if (fromUrl) {
+    cityInput.value = fromUrl.slice(0, 80);
+    run();
+  }
 }
+
+init();
