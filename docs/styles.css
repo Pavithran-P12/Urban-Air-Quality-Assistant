@@ -233,7 +233,7 @@ button {
   text-decoration-thickness: 2px;
 }
 /* While a search runs, the quick cities read as plain, unclickable text. */
-.quick-city:disabled {
+.quick-city[aria-disabled='true'] {
   color: var(--ink-soft);
   text-decoration: none;
   cursor: not-allowed;

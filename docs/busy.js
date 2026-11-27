@@ -13,12 +13,19 @@ export const SLOW_NOTICE_TEXT = 'Still checking… trying a backup source.';
 /**
  * Lock (or unlock) every control that would start a search or change the city shown, so the
  * city on screen always matches the search that is running.
- * @param {{cityInput:{readOnly:boolean}, buttons:Iterable<{disabled:boolean}>}} controls
+ *
+ * Buttons get aria-disabled rather than the native disabled attribute: they stay in the Tab order
+ * and screen readers announce them as unavailable, instead of silently vanishing mid-search.
+ * Because aria-disabled does not block clicks, every click handler also checks the busy flag.
+ * @param {{cityInput:{readOnly:boolean}, buttons:Iterable<Pick<Element,'setAttribute'|'removeAttribute'>>}} controls
  * @param {boolean} locked
  */
 export function lockSearchControls({ cityInput, buttons }, locked) {
   cityInput.readOnly = locked;
-  for (const button of buttons) button.disabled = locked;
+  for (const button of buttons) {
+    if (locked) button.setAttribute('aria-disabled', 'true');
+    else button.removeAttribute('aria-disabled');
+  }
 }
 
 /**

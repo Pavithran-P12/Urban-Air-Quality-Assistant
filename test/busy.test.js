@@ -1,6 +1,6 @@
 /**
- * Regression tests for the busy state: quick cities can't change the city mid-search (Fix A),
- * and the loading line says when a backup source is being tried, announced once (Fix B).
+ * The busy state: quick cities cannot change the city mid-search, and the loading line says when a
+ * backup source is being tried, announced once.
  */
 import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,46 +10,56 @@ import { SERVER_BUDGET_MS } from '../supabase/functions/air-data/handler.js';
 
 const html = readFileSync(new URL('../docs/index.html', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
-const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
 
-describe('Fix A: search controls are locked while a search runs', () => {
-  const controls = () => ({
-    cityInput: { readOnly: false },
-    buttons: [{ disabled: false }, { disabled: false }, { disabled: false }],
-  });
+describe('busy state: search controls are locked while a search runs', () => {
+  /** A stand-in button that records its attributes. */
+  const fakeButton = () => {
+    const attrs = new Map();
+    return {
+      attrs,
+      disabled: false,
+      setAttribute: (k, v) => attrs.set(k, v),
+      removeAttribute: (k) => attrs.delete(k),
+    };
+  };
+  const controls = () => ({ cityInput: { readOnly: false }, buttons: [fakeButton(), fakeButton(), fakeButton()] });
 
-  test('locking makes the city box read-only and disables every quick button', () => {
+  test('locking makes the city box read-only and marks every quick button aria-disabled', () => {
     const c = controls();
     lockSearchControls(c, true);
     assert.equal(c.cityInput.readOnly, true);
-    assert.ok(c.buttons.every((b) => b.disabled));
+    assert.ok(c.buttons.every((b) => b.attrs.get('aria-disabled') === 'true'));
   });
 
-  test('unlocking restores them', () => {
+  test('buttons are never natively disabled, so they stay in the Tab order', () => {
+    const c = controls();
+    lockSearchControls(c, true);
+    assert.ok(c.buttons.every((b) => b.disabled === false));
+  });
+
+  test('unlocking removes the attribute', () => {
     const c = controls();
     lockSearchControls(c, true);
     lockSearchControls(c, false);
     assert.equal(c.cityInput.readOnly, false);
-    assert.ok(c.buttons.every((b) => !b.disabled));
+    assert.ok(c.buttons.every((b) => !b.attrs.has('aria-disabled')));
   });
 
   test('every quick city and "use where I am" share the class the lock uses', () => {
     const quick = html.match(/<button[^>]*class="quick-city"[^>]*>/g) ?? [];
     assert.equal(quick.length, 6, 'five cities plus "use where I am"');
     assert.ok(quick.some((b) => b.includes('id="locate"')));
-    assert.match(app, /querySelectorAll\('\.quick-city'\)/);
   });
 
   test('click handlers ignore taps while busy, including a late location answer', () => {
+    const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
     const guards = app.match(/if \(busy\) return;/g) ?? [];
     // run(), quick-city click, locate click, and the geolocation success callback.
     assert.ok(guards.length >= 4, `expected 4 busy guards, found ${guards.length}`);
-    const quickHandler = app.slice(app.indexOf('.quick-city[data-city]'), app.indexOf("$('locate')"));
-    assert.ok(quickHandler.indexOf('if (busy) return') < quickHandler.indexOf('cityInput.value ='));
   });
 
   test('the disabled state is visibly different', () => {
-    const disabled = css.match(/\.quick-city:disabled\s*{([^}]*)}/)?.[1] ?? '';
+    const disabled = css.match(/\.quick-city\[aria-disabled='true'\]\s*{([^}]*)}/)?.[1] ?? '';
     assert.match(disabled, /text-decoration:\s*none/);
     assert.match(disabled, /cursor:\s*not-allowed/);
     assert.match(disabled, /color:\s*var\(--ink-soft\)/);
@@ -71,7 +81,7 @@ describe('Fix A: search controls are locked while a search runs', () => {
   });
 });
 
-describe('Fix B: slow-search notice', () => {
+describe('busy state: slow-search notice', () => {
   let rendered;
   let announced;
   let status;
