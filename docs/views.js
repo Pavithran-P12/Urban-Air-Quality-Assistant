@@ -3,6 +3,7 @@
  * textContent (never innerHTML), so nothing it contains can become markup.
  */
 import { clock } from './lib/time.js';
+import { isNum } from './lib/guards.js';
 import { renderForecastChart } from './chart.js';
 
 /** Short, plain-language health message per AQI band. */
@@ -15,6 +16,9 @@ const BAND_MESSAGE = {
   hazardous: 'Avoid going out. Seal your home and run any purifiers you have.',
   unknown: "We couldn't read the current air quality.",
 };
+
+/** Rain chances below this are not worth mentioning as a smog-clearing factor (%). */
+const RAIN_WORTH_MENTIONING = 20;
 
 const COST_LABEL = { free: 'Free', low: 'Under ₹1,000', medium: 'Costs a bit more' };
 const IMPACT_LABEL = { high: 'Big difference.', medium: 'Some difference.', low: 'Small win.' };
@@ -30,7 +34,7 @@ const POLLUTANTS = [
 export const $ = (id) => document.getElementById(id);
 
 /** Create an element with optional class and text (always textContent, never HTML). */
-export function el(tag, className, text) {
+function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text != null && text !== '') node.textContent = text;
@@ -110,37 +114,56 @@ function renderSourceNote(air) {
       : `A model estimate from the CAMS global forecast (via Open-Meteo) for an area about 45 km wide, so every neighbourhood in a city shows similar numbers. Treat it as a city-wide guide.${method}${when}`);
 }
 
-function renderForecastText(air, weather) {
-  const o = air.outlook;
-  const best = air.cleanestHours.find((h) => h.aqi === o?.bestAqi);
-  $('hours-note').textContent = !air.cleanestHours.length
-    ? "There's no hourly forecast for this place right now, so plan around today's reading."
-    : o?.improves && best
-      ? `The cleanest hour ahead is around ${clock(best.time)}, when the AQI should drop to about ${best.aqi}. Plan errands and airing out for then.`
-      : "The air isn't expected to get much better in the next day, so keep time outside short.";
+/** @type {import('./lib/types.js').WeatherSummary} */
+const NO_WEATHER = Object.freeze({ temperature: null, wind: null, windAtBest: null, rainChanceMax24: null });
 
+/** The cleanest hour the outlook refers to, if any. */
+const bestHourOf = (air) => air.cleanestHours.find((h) => h.aqi === air.outlook?.bestAqi);
+
+/**
+ * The plain-language note under the chart about when the air is cleanest.
+ * @param {import('./lib/types.js').AirReading} air
+ * @returns {string}
+ */
+export function hoursNoteText(air) {
+  if (!air.cleanestHours.length) {
+    return "There's no hourly forecast for this place right now, so plan around today's reading.";
+  }
+  const best = bestHourOf(air);
+  return air.outlook?.improves && best
+    ? `The cleanest hour ahead is around ${clock(best.time)}, when the AQI should drop to about ${best.aqi}. Plan errands and airing out for then.`
+    : "The air isn't expected to get much better in the next day, so keep time outside short.";
+}
+
+/**
+ * One sentence on wind and rain, or '' when there is nothing worth saying.
+ * @param {import('./lib/types.js').WeatherSummary|null} weather
+ * @param {{time:string}|undefined} best
+ * @returns {string}
+ */
+export function weatherLineText(weather, best) {
+  const w = weather ?? NO_WEATHER;
   const parts = [];
-  if (typeof weather?.wind === 'number') parts.push(`wind is ${Math.round(weather.wind)} km/h now`);
-  if (typeof weather?.windAtBest === 'number' && best)
-    parts.push(`${Math.round(weather.windAtBest)} km/h around ${clock(best.time)}`);
-  if (typeof weather?.rainChanceMax24 === 'number' && weather.rainChanceMax24 >= 20)
-    parts.push(`there's up to a ${weather.rainChanceMax24}% chance of rain`);
+  if (isNum(w.wind)) parts.push(`wind is ${Math.round(w.wind)} km/h now`);
+  if (isNum(w.windAtBest) && best) parts.push(`${Math.round(w.windAtBest)} km/h around ${clock(best.time)}`);
+  if (isNum(w.rainChanceMax24) && w.rainChanceMax24 >= RAIN_WORTH_MENTIONING) {
+    parts.push(`there's up to a ${w.rainChanceMax24}% chance of rain`);
+  }
+  return parts.length ? `Wind and rain help clear smog: ${parts.join(', ')}.` : '';
+}
+
+function renderForecastText(air, weather) {
+  $('hours-note').textContent = hoursNoteText(air);
   const line = $('weather-line');
-  line.hidden = parts.length === 0;
-  line.textContent = parts.length ? `Wind and rain help clear smog: ${parts.join(', ')}.` : '';
+  line.textContent = weatherLineText(weather, bestHourOf(air));
+  line.hidden = !line.textContent;
 }
 
 /** Last chart inputs, so the chart can be drawn once visible and redrawn on resize. */
 let lastChart = null;
 export function drawChart() {
   if (!lastChart) return;
-  const ok = renderForecastChart(
-    $('forecast-chart'),
-    $('forecast-rows'),
-    lastChart.forecast,
-    lastChart.best,
-    lastChart.weatherHours,
-  );
+  const ok = renderForecastChart($('forecast-chart'), $('forecast-rows'), lastChart);
   $('forecast-card').hidden = !ok;
 }
 

@@ -1,193 +1,199 @@
 /**
- * Page controller: reads the form, loads the air report (cached per place for a few minutes),
- * asks Gemini for a plan with the rules engine as fallback, and hands both to the views.
+ * Page wiring: finds the elements, builds the `ui` the search controller talks to, and connects
+ * form and button events. The search logic itself lives in searchController.js.
  */
 import { getAirReport, isCacheable } from './lib/airQuality.js';
 import { buildRuleAdvice } from './lib/rules.js';
-import { parseLocation, parseProfile } from './lib/validate.js';
+import { parseProfile } from './lib/validate.js';
 import { AIR_DATA_FUNCTION_URL, REPORT_CACHE_MS } from './config.js';
 import { fetchAiAdvice } from './api.js';
-import { describeForLog, toUserMessage } from './lib/errors.js';
 import { $, announce, announcementText, drawChart, renderAdvice, renderAir } from './views.js';
 import { createLoadingStatus, lockSearchControls } from './busy.js';
+import { createReportCache, createSearchController } from './searchController.js';
 
-function init() {
-  const form = $('advice-form');
-  const cityInput = $('city');
-  const submit = $('submit');
-  const submitText = submit.querySelector('.btn-text');
+const RESIZE_DEBOUNCE_MS = 150;
+const COPY_FEEDBACK_MS = 2000;
+const GEOLOCATION_OPTIONS = { timeout: 10_000, maximumAge: 600_000 };
+
+/**
+ * The page side of the controller's SearchUi: every DOM read and write for a search.
+ * @param {HTMLFormElement} form
+ * @param {{coords:{latitude:number, longitude:number}|null}} state coordinates of the place shown, if any
+ */
+function createUi(form, state) {
+  const cityInput = /** @type {HTMLInputElement} */ ($('city'));
+  const submit = /** @type {HTMLButtonElement} */ ($('submit'));
   const results = $('results');
-  const loading = $('skeleton');
-  let coords = null;
-  let busy = false;
-  const reportCache = new Map();
-  // Everything that could start a search or change the city shown: quick cities and "use where I am".
-  const searchControls = { cityInput, buttons: [...form.querySelectorAll('.quick-city')] };
-  const status = createLoadingStatus({
-    render: (text) => ($('loading-text').textContent = text),
-    announce,
+  const controls = { cityInput, buttons: [...form.querySelectorAll('.quick-city')] };
+  const status = createLoadingStatus({ render: (text) => ($('loading-text').textContent = text), announce });
+
+  const setText = (id, message) => {
+    const node = $(id);
+    node.textContent = message;
+    node.hidden = !message;
+  };
+  const showFieldError = (message) => {
+    setText('city-error', message);
+    cityInput.setAttribute('aria-invalid', message ? 'true' : 'false');
+  };
+
+  return {
+    clearErrors() {
+      setText('form-error', '');
+      showFieldError('');
+    },
+    /** Show a problem with the place. Validation errors move focus to the box; others don't. */
+    showFieldError(message, { focus = true } = {}) {
+      showFieldError(message);
+      if (focus) cityInput.focus();
+    },
+    clearFieldError: () => showFieldError(''),
+    /** Called by the controller only after it accepts a search, so the box matches that search. */
+    showPlace(label, location) {
+      cityInput.value = label;
+      state.coords = 'latitude' in location ? { latitude: location.latitude, longitude: location.longitude } : null;
+    },
+    showError: (message) => setText('form-error', message),
+    setBusy(on) {
+      if (on) results.hidden = true;
+      submit.disabled = on;
+      submit.querySelector('.btn-text').textContent = on ? 'Checking…' : 'Check the air';
+      $('skeleton').hidden = !on;
+      lockSearchControls(controls, on);
+      if (!on) status.stop();
+    },
+    checking: () => status.checking('Checking the air…'),
+    writing: () => status.step('Writing your plan…'),
+    showAir: renderAir,
+    showAdvice: renderAdvice,
+    showResults: (report, location) => revealResults(results, report, location),
+  };
+}
+
+/** Show the results: draw the chart, focus the heading, announce one short line, scroll. */
+function revealResults(results, report, location) {
+  results.hidden = false;
+  drawChart();
+  // Focus the results heading (not the whole section) and announce one short line.
+  $('aqi-place').focus({ preventScroll: true });
+  announce(announcementText(report.place, report.air));
+  results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (location.city) rememberCity(location.city);
+}
+
+/** Put the city in the address bar so the page can be shared or reloaded. */
+function rememberCity(city) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('city', city);
+  window.history.replaceState(null, '', url);
+}
+
+/** The household answers from the form, validated. */
+function readProfile(form) {
+  const value = (name) => form.querySelector(`input[name="${name}"]:checked`)?.value;
+  return parseProfile({
+    household: [...form.querySelectorAll('input[name="household"]:checked')].map((i) => i.value),
+    commute: value('commute'),
+    cooking: value('cooking'),
+    heating: value('heating'),
+    hasPurifier: /** @type {HTMLInputElement} */ ($('hasPurifier')).checked,
+    question: /** @type {HTMLTextAreaElement} */ ($('question')).value,
   });
+}
 
-  /** Look up a place, reusing a recent result for the same place in this tab. */
-  async function loadReport(location) {
-    const key = location.city
-      ? `c:${location.city.toLowerCase()}`
-      : `g:${location.latitude.toFixed(3)},${location.longitude.toFixed(3)}`;
-    const hit = reportCache.get(key);
-    if (hit && Date.now() - hit.at < REPORT_CACHE_MS) return hit.report;
-    const report = await getAirReport(location, fetch, { airDataUrl: AIR_DATA_FUNCTION_URL });
-    if (isCacheable(report)) reportCache.set(key, { at: Date.now(), report });
-    return report;
+/**
+ * "Use where I am": ask the browser for coordinates, then search them. If a search started while
+ * the browser was asking, the controller ignores this one and the box keeps the running search.
+ */
+function locate(ui, startSearch) {
+  if (!navigator.geolocation) {
+    ui.showFieldError("This browser can't share your location. Type your city instead.", { focus: false });
+    return;
   }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => startSearch({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }, 'Where I am'),
+    () => ui.showFieldError("Couldn't get your location. Type your city instead.", { focus: false }),
+    GEOLOCATION_OPTIONS,
+  );
+}
 
-  const showFieldError = (msg) => {
-    $('city-error').textContent = msg;
-    $('city-error').hidden = !msg;
-    cityInput.setAttribute('aria-invalid', msg ? 'true' : 'false');
-  };
-  const showError = (msg) => {
-    $('form-error').textContent = msg;
-    $('form-error').hidden = !msg;
-  };
-
-  function setBusy(on) {
-    busy = on;
-    submit.disabled = on;
-    submitText.textContent = on ? 'Checking…' : 'Check the air';
-    loading.hidden = !on;
-    lockSearchControls(searchControls, on);
-    if (!on) status.stop();
+async function copyLink(button) {
+  try {
+    await navigator.clipboard.writeText(window.location.href);
+    button.textContent = 'Link copied';
+  } catch {
+    button.textContent = "Couldn't copy the link";
   }
+  setTimeout(() => (button.textContent = 'Copy a link to this city'), COPY_FEEDBACK_MS);
+}
 
-  function readProfile() {
-    const value = (name) => form.querySelector(`input[name="${name}"]:checked`)?.value;
-    return parseProfile({
-      household: [...form.querySelectorAll('input[name="household"]:checked')].map((i) => i.value),
-      commute: value('commute'),
-      cooking: value('cooking'),
-      heating: value('heating'),
-      hasPurifier: $('hasPurifier').checked,
-      question: $('question').value,
+/** Connect every control. Quick cities and "use where I am" are ignored while a search runs. */
+function wireEvents(form, state, ui) {
+  const { cityInput, controller } = state;
+  /** Search the given place (shown as `label` once accepted), or whatever the box holds now. */
+  const startSearch = (place, label) =>
+    controller.search({
+      place: place ?? state.coords ?? { city: cityInput.value },
+      profile: readProfile(form),
+      label,
     });
-  }
-
-  async function run() {
-    if (busy) return;
-    showError('');
-    showFieldError('');
-
-    let location;
-    try {
-      location = parseLocation(coords ?? { city: cityInput.value });
-    } catch (err) {
-      showFieldError(toUserMessage(err));
-      cityInput.focus();
-      return;
-    }
-    const profile = readProfile();
-
-    results.hidden = true;
-    setBusy(true);
-    status.checking('Checking the air…');
-
-    try {
-      const report = await loadReport(location);
-      renderAir(report);
-      status.step('Writing your plan…');
-      const aiAdvice = await fetchAiAdvice(report, profile);
-      renderAdvice(aiAdvice ?? buildRuleAdvice(report, profile), aiAdvice ? 'gemini' : 'rules');
-
-      setBusy(false);
-      results.hidden = false;
-      drawChart();
-      // Focus the results heading (not the whole section) and announce one short line.
-      $('aqi-place').focus({ preventScroll: true });
-      announce(announcementText(report.place, report.air));
-      results.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-      if (location.city) {
-        const url = new URL(window.location.href);
-        url.searchParams.set('city', location.city);
-        window.history.replaceState(null, '', url);
-      }
-    } catch (err) {
-      setBusy(false);
-      // Known app errors carry a user-facing message; anything else gets a generic one.
-      // Only a sanitised summary goes to the console: no stack, URLs or key-like values.
-      console.error('Air check failed', describeForLog(err));
-      showError(toUserMessage(err));
-    }
-  }
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    run();
+    startSearch();
   });
-
   cityInput.addEventListener('input', () => {
-    coords = null;
-    showFieldError('');
+    state.coords = null;
+    ui.clearFieldError();
   });
-
   form.querySelectorAll('.quick-city[data-city]').forEach((btn) => {
+    // aria-disabled doesn't block clicks; the controller ignores taps while a search runs.
     btn.addEventListener('click', () => {
-      if (busy) return; // Disabled while busy; this guard keeps the city box in step with the running search.
-      cityInput.value = btn.dataset.city;
-      coords = null;
-      run();
+      const city = /** @type {HTMLElement} */ (btn).dataset.city;
+      startSearch({ city }, city);
     });
   });
-
+  // Not busy-dependent for safety (the controller already ignores a late answer); this only avoids
+  // asking for location permission while the button is marked unavailable.
   $('locate').addEventListener('click', () => {
-    if (busy) return;
-    if (!navigator.geolocation) {
-      showFieldError("This browser can't share your location. Type your city instead.");
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        if (busy) return; // A search started while the browser was asking for permission.
-        coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-        cityInput.value = 'Where I am';
-        showFieldError('');
-        run();
-      },
-      () => showFieldError("Couldn't get your location. Type your city instead."),
-      { timeout: 10000, maximumAge: 600000 },
-    );
+    if (!controller.busy) locate(ui, startSearch);
   });
-
   $('again').addEventListener('click', () => {
     cityInput.value = '';
-    coords = null;
+    state.coords = null;
     window.scrollTo({ top: 0, behavior: 'smooth' });
     cityInput.focus({ preventScroll: true });
   });
-
-  $('share').addEventListener('click', async () => {
-    const btn = $('share');
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      btn.textContent = 'Link copied';
-    } catch {
-      btn.textContent = "Couldn't copy the link";
-    }
-    setTimeout(() => {
-      btn.textContent = 'Copy a link to this city';
-    }, 2000);
-  });
+  $('share').addEventListener('click', () => copyLink($('share')));
 
   let resizeTimer;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(drawChart, 150);
+    resizeTimer = setTimeout(drawChart, RESIZE_DEBOUNCE_MS);
   });
+  return startSearch;
+}
+
+function init() {
+  const form = /** @type {HTMLFormElement} */ ($('advice-form'));
+  const place = { coords: null };
+  const ui = createUi(form, place);
+  const controller = createSearchController({
+    getReport: (location) => getAirReport(location, fetch, { airDataUrl: AIR_DATA_FUNCTION_URL }),
+    isCacheable,
+    getAdvice: fetchAiAdvice,
+    fallbackAdvice: buildRuleAdvice,
+    cache: createReportCache({ ttlMs: REPORT_CACHE_MS }),
+    ui,
+  });
+  const state = Object.assign(place, { controller, cityInput: /** @type {HTMLInputElement} */ ($('city')) });
+  const startSearch = wireEvents(form, state, ui);
 
   // Deep link: ?city=Delhi runs straight away.
   const fromUrl = new URLSearchParams(window.location.search).get('city');
   if (fromUrl) {
-    cityInput.value = fromUrl.slice(0, 80);
-    run();
+    state.cityInput.value = fromUrl.slice(0, 80);
+    startSearch();
   }
 }
 

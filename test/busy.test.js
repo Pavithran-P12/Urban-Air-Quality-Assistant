@@ -51,13 +51,6 @@ describe('busy state: search controls are locked while a search runs', () => {
     assert.ok(quick.some((b) => b.includes('id="locate"')));
   });
 
-  test('click handlers ignore taps while busy, including a late location answer', () => {
-    const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-    const guards = app.match(/if \(busy\) return;/g) ?? [];
-    // run(), quick-city click, locate click, and the geolocation success callback.
-    assert.ok(guards.length >= 4, `expected 4 busy guards, found ${guards.length}`);
-  });
-
   test('the disabled state is visibly different', () => {
     const disabled = css.match(/\.quick-city\[aria-disabled='true'\]\s*{([^}]*)}/)?.[1] ?? '';
     assert.match(disabled, /text-decoration:\s*none/);
