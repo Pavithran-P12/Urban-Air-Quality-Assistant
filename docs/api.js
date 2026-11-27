@@ -6,7 +6,7 @@ import { normaliseAdvice } from './lib/advice.js';
 import { ADVICE_FUNCTION_URL, ADVICE_TIMEOUT_MS } from './config.js';
 
 /** Drop the 48-hour series before sending: the server only needs the summary fields. */
-function trimForServer(report) {
+export function trimForServer(report) {
   return { place: report.place, air: { ...report.air, forecast: undefined }, weather: report.weather };
 }
 
