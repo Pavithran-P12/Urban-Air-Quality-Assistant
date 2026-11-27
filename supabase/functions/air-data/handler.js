@@ -6,8 +6,17 @@
 import { clientIp, corsFor, createRateLimiter, createTtlCache, readJson } from '../_shared/http.js';
 
 const AQ_URL = 'https://airquality.googleapis.com/v1';
-const TIMEOUT_MS = 8000;
+/**
+ * Timeout budget for one lookup, shared by every Google call it makes (current conditions and
+ * forecast pages run against the same deadline). The browser waits AIR_DATA_TIMEOUT_MS (11 s) in
+ * docs/lib/airQuality.js, i.e. this budget plus ~2 s for network and a cold start, so the browser
+ * never gives up while the function is still inside its budget.
+ */
+export const SERVER_BUDGET_MS = 9000;
 const FORECAST_HOURS = 48;
+const MAX_FORECAST_PAGES = 2;
+/** Minimum hours for a forecast to count as complete (and therefore cacheable). */
+export const MIN_COMPLETE_HOURS = 24;
 const MAX_BODY_BYTES = 1000;
 
 export class GoogleAqError extends Error {
@@ -41,14 +50,20 @@ function localIndex(indexes) {
     : null;
 }
 
-async function post(fetchImpl, path, apiKey, body) {
+/**
+ * POST to the Air Quality API, aborting when the shared deadline passes.
+ * @param {number} deadline epoch ms by which the call must finish
+ */
+async function post(fetchImpl, path, apiKey, body, deadline) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new GoogleAqError('Google Air Quality time budget exhausted');
   let res;
   try {
     res = await fetchImpl(`${AQ_URL}/${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(remaining),
     });
   } catch (err) {
     throw new GoogleAqError(`Google Air Quality unreachable: ${err.message}`);
@@ -58,27 +73,45 @@ async function post(fetchImpl, path, apiKey, body) {
 }
 
 /**
- * Fetch current conditions and a 48 h hourly forecast, trimmed.
- * @returns {Promise<{provider:string, resolutionM:number, current:object, hourly:object[]}>}
+ * Fetch current conditions and a 48 h hourly forecast, trimmed, within one time budget.
+ * Current conditions are required; a failed or slow forecast is reported as incomplete instead of
+ * failing the whole lookup, so the app still shows today's reading.
+ * @returns {Promise<{provider:string, resolutionM:number, current:object, hourly:object[], forecastComplete:boolean}>}
  */
-export async function fetchGoogleAir({ latitude, longitude, apiKey, fetchImpl, now = Date.now }) {
+export async function fetchGoogleAir({
+  latitude,
+  longitude,
+  apiKey,
+  fetchImpl,
+  now = Date.now,
+  budgetMs = SERVER_BUDGET_MS,
+  logger = console,
+}) {
+  const deadline = Date.now() + budgetMs;
   const location = { latitude, longitude };
   const extraComputations = ['LOCAL_AQI', 'POLLUTANT_CONCENTRATION', 'DOMINANT_POLLUTANT_CONCENTRATION'];
   const start = new Date(Math.floor(now() / 3_600_000) * 3_600_000 + 3_600_000);
   const end = new Date(start.getTime() + (FORECAST_HOURS - 1) * 3_600_000);
 
+  const collected = [];
   const forecastPages = async () => {
-    const hours = [];
+    const hours = collected;
     let pageToken;
-    for (let page = 0; page < 3 && hours.length < FORECAST_HOURS; page += 1) {
-      const data = await post(fetchImpl, 'forecast:lookup', apiKey, {
-        location,
-        period: { startTime: start.toISOString(), endTime: end.toISOString() },
-        pageSize: FORECAST_HOURS,
-        universalAqi: false,
-        extraComputations: ['LOCAL_AQI', 'POLLUTANT_CONCENTRATION'],
-        ...(pageToken ? { pageToken } : {}),
-      });
+    for (let page = 0; page < MAX_FORECAST_PAGES && hours.length < FORECAST_HOURS; page += 1) {
+      const data = await post(
+        fetchImpl,
+        'forecast:lookup',
+        apiKey,
+        {
+          location,
+          period: { startTime: start.toISOString(), endTime: end.toISOString() },
+          pageSize: FORECAST_HOURS,
+          universalAqi: false,
+          extraComputations: ['LOCAL_AQI', 'POLLUTANT_CONCENTRATION'],
+          ...(pageToken ? { pageToken } : {}),
+        },
+        deadline,
+      );
       hours.push(...(data.hourlyForecasts ?? []));
       pageToken = data.nextPageToken;
       if (!pageToken) break;
@@ -86,14 +119,24 @@ export async function fetchGoogleAir({ latitude, longitude, apiKey, fetchImpl, n
     return hours.slice(0, FORECAST_HOURS);
   };
 
+  const forecastOrPartial = async () => {
+    try {
+      return await forecastPages();
+    } catch (err) {
+      logger.error(JSON.stringify({ fn: 'air-data', part: 'forecast', error: err.message }));
+      return collected.slice(0, FORECAST_HOURS); // keep any pages that did arrive
+    }
+  };
+
   const [current, hours] = await Promise.all([
-    post(fetchImpl, 'currentConditions:lookup', apiKey, {
-      location,
-      universalAqi: false,
-      extraComputations,
-      languageCode: 'en',
-    }),
-    forecastPages(),
+    post(
+      fetchImpl,
+      'currentConditions:lookup',
+      apiKey,
+      { location, universalAqi: false, extraComputations, languageCode: 'en' },
+      deadline,
+    ),
+    forecastOrPartial(),
   ]);
 
   return {
@@ -110,6 +153,7 @@ export async function fetchGoogleAir({ latitude, longitude, apiKey, fetchImpl, n
       localAqi: localIndex(h.indexes)?.aqi ?? null,
       pollutants: trimPollutants(h.pollutants).filter((p) => p.code === 'pm25'),
     })),
+    forecastComplete: hours.length >= MIN_COMPLETE_HOURS,
   };
 }
 
@@ -126,6 +170,7 @@ export function createAirDataHandler({
   rateLimiter = createRateLimiter({ limit: 30 }),
   cache = createTtlCache({ ttlMs: 15 * 60_000 }),
   now = Date.now,
+  budgetMs = SERVER_BUDGET_MS,
 }) {
   return async function handle(req) {
     const { allowed, headers, json } = corsFor(req, allowedOrigins);
@@ -149,9 +194,18 @@ export function createAirDataHandler({
 
     const started = now();
     try {
-      const data = await fetchGoogleAir({ latitude: lat, longitude: lon, apiKey, fetchImpl, now });
-      cache.set(key, data);
-      logger.info(JSON.stringify({ fn: 'air-data', cell: key, ms: now() - started, hours: data.hourly.length }));
+      const data = await fetchGoogleAir({ latitude: lat, longitude: lon, apiKey, fetchImpl, now, budgetMs, logger });
+      // Only complete answers are cached, so a transient forecast failure isn't repeated for 15 min.
+      if (data.forecastComplete) cache.set(key, data);
+      logger.info(
+        JSON.stringify({
+          fn: 'air-data',
+          cell: key,
+          ms: now() - started,
+          hours: data.hourly.length,
+          complete: data.forecastComplete,
+        }),
+      );
       return json(200, data, { 'X-Cache': 'MISS' });
     } catch (err) {
       logger.error(JSON.stringify({ fn: 'air-data', cell: key, error: err.message }));

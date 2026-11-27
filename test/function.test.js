@@ -28,7 +28,7 @@ function geminiFetch(...responses) {
 const request = (body, { origin = ORIGIN, method = 'POST', ip = '1.2.3.4' } = {}) =>
   new Request('https://example.supabase.co/functions/v1/air-advice', {
     method,
-    headers: { 'content-type': 'application/json', origin, 'x-forwarded-for': ip },
+    headers: { 'content-type': 'application/json', origin, 'cf-connecting-ip': ip },
     body: method === 'POST' ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
   });
 

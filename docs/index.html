@@ -10,8 +10,8 @@
   <title>Urban Air: is the air safe today?</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f5f78'/%3E%3Cpath d='M6 22h4v-7h3v7h3V9h4v13h2v-5h4v5' fill='none' stroke='%23eef3f2' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="preload" href="fonts/anek-latin.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=6">
-  <script type="module" src="app.js?v=6"></script>
+  <link rel="stylesheet" href="styles.css?v=8">
+  <script type="module" src="app.js?v=8"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -24,6 +24,9 @@
   </header>
 
   <main id="main">
+    <!-- The only live region: one short status line, so screen readers never read the whole results page. -->
+    <p id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+
     <section class="ask column" aria-labelledby="ask-title">
       <h1 id="ask-title">Is the air safe to go out in today?</h1>
 
@@ -108,10 +111,10 @@
       </form>
     </section>
 
-    <section id="results" class="results" aria-live="polite" aria-busy="false" hidden tabindex="-1" aria-labelledby="aqi-place">
+    <section id="results" class="results" hidden aria-labelledby="aqi-place">
       <div class="sky" id="sky" data-level="unknown">
         <div class="column sky-inner">
-          <h2 class="sky-place" id="aqi-place"></h2>
+          <h2 class="sky-place" id="aqi-place" tabindex="-1"></h2>
           <p class="sky-number"><span id="aqi-number"></span><span class="sky-unit">US AQI</span></p>
           <p class="sky-level" id="aqi-label"></p>
           <p class="sky-message" id="aqi-msg"></p>
@@ -181,7 +184,7 @@
     </section>
 
     <div id="skeleton" class="loading column" hidden>
-      <p class="loading-text" id="loading-text" role="status">Checking the air…</p>
+      <p class="loading-text" id="loading-text">Checking the air…</p>
     </div>
   </main>
 

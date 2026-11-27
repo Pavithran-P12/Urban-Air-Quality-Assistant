@@ -1,11 +1,19 @@
 import { categorize, cleanestHours, dominantPollutant, outlook, pm25Multiple, pm25ToUsAqi } from './aqi.js';
 import { fromGoogle } from './normalise.js';
 import { SOURCES } from './sources.js';
+import { UpstreamError } from './errors.js';
 import { fetchWeather, summariseWeather } from './weather.js';
 
 const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 const AIR_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const TIMEOUT_MS = 8000;
+/**
+ * How long the browser waits for the air-data function: its server budget (SERVER_BUDGET_MS, 9 s,
+ * in supabase/functions/air-data/handler.js) plus ~2 s for network and a cold start.
+ */
+export const AIR_DATA_TIMEOUT_MS = 11_000;
+/** Shown when Google was asked for but didn't answer, so the coarser fallback is never silent. */
+export const GOOGLE_FALLBACK_REASON = "Google's 500 m data wasn't available just now";
 
 const SUB_INDEX_FIELDS = {
   pm2_5: 'us_aqi_pm2_5',
@@ -16,13 +24,7 @@ const SUB_INDEX_FIELDS = {
   sulphur_dioxide: 'us_aqi_sulphur_dioxide',
 };
 
-export class UpstreamError extends Error {
-  constructor(message, status = 502) {
-    super(message);
-    this.name = 'UpstreamError';
-    this.status = status;
-  }
-}
+export { UpstreamError };
 
 async function getJson(url, fetchImpl) {
   let res;
@@ -33,7 +35,11 @@ async function getJson(url, fetchImpl) {
   }
   if (!res.ok)
     throw new UpstreamError(`Air quality service returned an error (${res.status}). Please try again shortly.`);
-  return res.json();
+  try {
+    return await res.json();
+  } catch {
+    throw new UpstreamError('The air quality service sent a response we could not read. Please try again shortly.');
+  }
 }
 
 const norm = (s) =>
@@ -174,14 +180,14 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
  * Returns null on any failure so the caller can fall back to Open-Meteo.
  * @param {string|undefined} url
  */
-export async function fetchGoogleAir(url, latitude, longitude, fetchImpl = fetch) {
+export async function fetchGoogleAir(url, latitude, longitude, fetchImpl = fetch, timeoutMs = AIR_DATA_TIMEOUT_MS) {
   if (!url) return null;
   try {
     const res = await fetchImpl(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ latitude, longitude }),
-      signal: AbortSignal.timeout(TIMEOUT_MS + 4000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return res.ok ? await res.json() : null;
   } catch {
@@ -195,10 +201,10 @@ export async function fetchGoogleAir(url, latitude, longitude, fetchImpl = fetch
  * Weather is fetched in parallel and is optional.
  * @param {{city?:string, latitude?:number, longitude?:number}} loc
  * @param {typeof fetch} [fetchImpl]
- * @param {{airDataUrl?:string}} [options]
+ * @param {{airDataUrl?:string, airDataTimeoutMs?:number}} [options]
  * @returns {Promise<import('./types.js').AirReport>}
  */
-export async function getAirReport(loc, fetchImpl = fetch, { airDataUrl } = {}) {
+export async function getAirReport(loc, fetchImpl = fetch, { airDataUrl, airDataTimeoutMs } = {}) {
   let place;
   if (typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
     place = { name: 'Your location', latitude: loc.latitude, longitude: loc.longitude, timezone: null };
@@ -207,14 +213,28 @@ export async function getAirReport(loc, fetchImpl = fetch, { airDataUrl } = {}) 
   }
 
   const [google, weather] = await Promise.all([
-    fetchGoogleAir(airDataUrl, place.latitude, place.longitude, fetchImpl),
+    fetchGoogleAir(airDataUrl, place.latitude, place.longitude, fetchImpl, airDataTimeoutMs),
     fetchWeather(place.latitude, place.longitude, fetchImpl),
   ]);
   const tz = { offsetSeconds: weather?.offsetSeconds ?? null, timeZone: weather?.timeZone ?? place.timezone ?? null };
 
   let air = google ? fromGoogle(google, tz) : null;
-  if (!air) air = await fetchAirQuality(place.latitude, place.longitude, fetchImpl);
+  if (!air) {
+    air = await fetchAirQuality(place.latitude, place.longitude, fetchImpl);
+    // Google was asked for but didn't answer: say so, rather than silently showing coarser data.
+    if (airDataUrl) air.source = { ...air.source, fallback: true, fallbackReason: GOOGLE_FALLBACK_REASON };
+  }
 
   const bestHour = air.cleanestHours.find((h) => h.aqi === air.outlook.bestAqi);
   return { place, air, weather: summariseWeather(weather, bestHour, air.time), weatherHours: weather?.hourly ?? [] };
+}
+
+/**
+ * Whether a report may be reused from the browser cache. Fallback results (Google failed) and
+ * reports with an incomplete forecast are transient, so the next search tries again.
+ * @param {import('./types.js').AirReport} report
+ * @returns {boolean}
+ */
+export function isCacheable(report) {
+  return !report?.air?.source?.fallback && (report?.air?.forecast?.length ?? 0) >= 24;
 }

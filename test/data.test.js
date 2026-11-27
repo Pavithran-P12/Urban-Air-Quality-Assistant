@@ -167,7 +167,7 @@ describe('air-data edge function', () => {
   const request = (body, { origin = ORIGIN, method = 'POST', ip = '1.1.1.1' } = {}) =>
     new Request('https://x.supabase.co/functions/v1/air-data', {
       method,
-      headers: { 'content-type': 'application/json', origin, 'x-forwarded-for': ip },
+      headers: { 'content-type': 'application/json', origin, 'cf-connecting-ip': ip },
       body: method === 'POST' ? JSON.stringify(body) : undefined,
     });
 

@@ -54,7 +54,9 @@ function buildRoutine(air, profile, rank, sensitive) {
     steps.push({
       time: 'All day',
       action: 'Keep outdoor trips short and bundle errands into one trip.',
-      why: "Air isn't forecast to improve in the next 24 hours, so total time outside is what you can control.",
+      why: air.cleanestHours.length
+        ? "Air isn't forecast to improve in the next 24 hours, so total time outside is what you can control."
+        : "There's no hourly forecast right now, so total time outside is what you can control.",
     });
   }
 

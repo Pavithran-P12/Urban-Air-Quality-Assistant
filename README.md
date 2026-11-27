@@ -117,9 +117,10 @@ The tests use Node's built-in test runner with mocked APIs, so no network or API
 
 - The Gemini key is a Supabase secret and is never sent to the browser.
 - All input is validated and whitelisted; free text is stripped of markup and fenced in the prompt as untrusted, to resist prompt injection.
-- The Edge Function only accepts requests from allowed origins, rate-limits bursts per IP (10/min), caps bodies at 10 KB, and rebuilds the air report from plain numbers (re-deriving band, outlook and main pollutant) before prompting.
+- The Edge Function only accepts requests from allowed origins, rate-limits bursts per client (10/min) using only the platform-set `CF-Connecting-IP` / `X-Real-IP` headers (never the spoofable `X-Forwarded-For`), caps bodies at 10 KB, and rebuilds the air report from plain numbers (re-deriving band, outlook and main pollutant) before prompting.
 - A strict Content Security Policy limits the page to its own scripts and three known APIs. The page renders with `textContent` only (no `innerHTML`), so model output can't inject HTML.
-- Network calls time out (6–12 s for data, 20–25 s for AI), and errors show friendly messages.
+- One timeout budget per lookup: the air-data function gives Google 9 s in total (current conditions and forecast share the deadline) and the browser waits 11 s. A slow forecast still returns today's reading; incomplete or fallback results are never cached, and a fallback is always labelled.
+- Known failures show a specific, friendly message; anything unexpected shows a generic one, with only a sanitised summary (no stack, URLs or keys) logged.
 - Caching: the air-data function caches each ~500 m cell for 15 minutes, and the browser reuses a place's result for 10 minutes, so repeat lookups cost no API calls.
 - Keys travel in headers (`X-Goog-Api-Key`, `x-goog-api-key`), never in URLs, so they don't end up in logs.
 - Edge functions log one JSON line per request (cell, duration, error) for debugging.

@@ -4,6 +4,7 @@
  * before it reaches the prompt or any upstream service.
  */
 import { SOURCES } from './sources.js';
+import { ValidationError } from './errors.js';
 
 export const OPTIONS = Object.freeze({
   commute: ['walk', 'cycle', 'public-transport', 'two-wheeler', 'car', 'work-from-home'],
@@ -14,13 +15,7 @@ export const OPTIONS = Object.freeze({
 
 const MAX_TEXT = 300;
 
-export class ValidationError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'ValidationError';
-    this.status = 400;
-  }
-}
+export { ValidationError };
 
 /** Strip control characters and angle brackets, collapse whitespace, cap length. */
 export function cleanText(value, max = MAX_TEXT) {
@@ -107,7 +102,7 @@ export function sanitizeReport(input = {}, { categorize, outlook, POLLUTANT_NAME
           ? { key: d.key, name: POLLUTANT_NAMES[d.key], aqi: num(d.aqi) }
           : null,
       localIndex:
-        li && num(li.aqi) !== null
+        li && num(li.aqi) !== null && cleanText(li.name, 60) && cleanText(li.category, 60)
           ? { name: cleanText(li.name, 60), aqi: num(li.aqi), category: cleanText(li.category, 60) }
           : null,
       source: src ?? SOURCES['open-meteo'],

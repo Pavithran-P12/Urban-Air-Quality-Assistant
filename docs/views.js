@@ -44,6 +44,38 @@ function paintSky(level) {
   requestAnimationFrame(() => requestAnimationFrame(() => (sky.dataset.level = level)));
 }
 
+/**
+ * One sentence about the local index, or '' when any part is missing (never "undefined").
+ * @param {{code?:string, name?:string, aqi?:number, category?:string}|null|undefined} li
+ * @returns {string}
+ */
+export function localIndexText(li) {
+  if (!li || typeof li.aqi !== 'number' || !li.name || !li.category) return '';
+  const who = li.code === 'ind_cpcb' ? "India's official index (NAQI)" : `The local index (${li.name})`;
+  return `${who} reads ${li.aqi}: ${li.category.toLowerCase()}.`;
+}
+
+/**
+ * The single sentence screen readers hear when results are ready, e.g.
+ * "Results for Chennai, Tamil Nadu, India: US AQI 160, Unhealthy."
+ * @param {{name?:string}|null|undefined} place
+ * @param {{usAqi?:number, category?:{label?:string}}|null|undefined} air
+ * @returns {string}
+ */
+export function announcementText(place, air) {
+  const where = place?.name ? `Results for ${place.name}` : 'Results ready';
+  if (typeof air?.usAqi !== 'number') return `${where}.`;
+  const level = air.category?.label && air.category.label !== 'Unknown' ? `, ${air.category.label}` : '';
+  return `${where}: US AQI ${air.usAqi}${level}.`;
+}
+
+/** Write to the page's one polite live region. Clearing first makes a repeated message re-announce. */
+export function announce(message) {
+  const region = $('announcer');
+  region.textContent = '';
+  requestAnimationFrame(() => (region.textContent = message));
+}
+
 function renderReadings(air) {
   const rows = [];
   for (const [key, label] of POLLUTANTS) {
@@ -62,31 +94,28 @@ function renderReadings(air) {
   dominant.textContent = air.dominant ? `Most of today's pollution is ${air.dominant.name}.` : '';
 
   const local = $('aqi-local');
-  local.hidden = !air.localIndex;
-  if (air.localIndex) {
-    const who =
-      air.localIndex.code === 'ind_cpcb' ? "India's official index (NAQI)" : `The local index, ${air.localIndex.name},`;
-    local.textContent = `${who} reads ${air.localIndex.aqi}: ${air.localIndex.category.toLowerCase()}.`;
-  } else {
-    local.textContent = '';
-  }
+  local.textContent = localIndexText(air.localIndex);
+  local.hidden = !local.textContent;
 }
 
 function renderSourceNote(air) {
   const s = air.source;
   const when = air.time ? ` Updated ${clock(air.time)} local time.` : '';
   const method = air.aqiEstimated ? ' The US AQI is worked out from PM2.5 with the US EPA formula.' : '';
+  const fallback = s.fallback && s.fallbackReason ? `${s.fallbackReason}, so this uses a coarser estimate. ` : '';
   $('data-note').textContent =
-    s.provider === 'google'
+    fallback +
+    (s.provider === 'google'
       ? `A model estimate from the Google Air Quality API for a 500 m area around this place, not a sensor reading. Streets next to heavy traffic can be worse.${method}${when}`
-      : `A model estimate from the CAMS global forecast (via Open-Meteo) for an area about 45 km wide, so every neighbourhood in a city shows similar numbers. Treat it as a city-wide guide.${method}${when}`;
+      : `A model estimate from the CAMS global forecast (via Open-Meteo) for an area about 45 km wide, so every neighbourhood in a city shows similar numbers. Treat it as a city-wide guide.${method}${when}`);
 }
 
 function renderForecastText(air, weather) {
   const o = air.outlook;
   const best = air.cleanestHours.find((h) => h.aqi === o?.bestAqi);
-  $('hours-note').textContent =
-    o?.improves && best
+  $('hours-note').textContent = !air.cleanestHours.length
+    ? "There's no hourly forecast for this place right now, so plan around today's reading."
+    : o?.improves && best
       ? `The cleanest hour ahead is around ${clock(best.time)}, when the AQI should drop to about ${best.aqi}. Plan errands and airing out for then.`
       : "The air isn't expected to get much better in the next day, so keep time outside short.";
 

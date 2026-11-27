@@ -232,6 +232,17 @@ button {
 .quick-city:hover {
   text-decoration-thickness: 2px;
 }
+/* While a search runs, the quick cities read as plain, unclickable text. */
+.quick-city:disabled {
+  color: var(--ink-soft);
+  text-decoration: none;
+  cursor: not-allowed;
+}
+.search input:read-only {
+  color: var(--ink-soft);
+  background: var(--paper);
+  cursor: not-allowed;
+}
 
 .household {
   margin-top: 2rem;

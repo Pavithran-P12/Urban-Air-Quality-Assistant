@@ -24,6 +24,20 @@ export const GOOGLE_CODES = Object.freeze({
 });
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const isText = (v) => typeof v === 'string' && v.trim().length > 0;
+
+/**
+ * Keep a provider's local index (e.g. India's NAQI) only if it is complete: a numeric value, a name
+ * and a category. A partial index would otherwise reach the page as "undefined".
+ * @param {unknown} li
+ * @returns {{code?:string, name:string, aqi:number, category:string}|null}
+ */
+export function validLocalIndex(li) {
+  if (!li || typeof li !== 'object') return null;
+  const { code, name, aqi, category } = /** @type {Record<string, unknown>} */ (li);
+  if (!isNum(aqi) || !isText(name) || !isText(category)) return null;
+  return { ...(isText(code) ? { code } : {}), name: name.trim(), aqi, category: category.trim() };
+}
 
 /**
  * Convert one concentration to µg/m³.
@@ -85,9 +99,10 @@ export function fromGoogle(g, tz = {}) {
   const usAqi = pm25ToUsAqi(pollutants.pm2_5);
   if (usAqi === null) return null;
 
-  const li = g.current.localIndex;
-  const domKey = GOOGLE_CODES[li?.dominant];
-  const time = toLocalIso(g.current.dateTime, tz);
+  const li = validLocalIndex(g?.current?.localIndex);
+  const rawDominant = g?.current?.localIndex?.dominant;
+  const domKey = Object.hasOwn(GOOGLE_CODES, rawDominant ?? '') ? GOOGLE_CODES[rawDominant] : null;
+  const time = toLocalIso(g?.current?.dateTime, tz);
   const forecast = (g.hourly ?? [])
     .map((h) => ({ time: toLocalIso(h.dateTime, tz), aqi: pm25ToUsAqi(toMicrograms(h.pollutants?.[0])) }))
     .filter((h) => h.time && isNum(h.aqi));
@@ -108,7 +123,7 @@ export function fromGoogle(g, tz = {}) {
     },
     pm25WhoMultiple: pm25Multiple(pollutants.pm2_5),
     dominant: domKey ? { key: domKey, name: POLLUTANT_NAMES[domKey], aqi: domKey === 'pm2_5' ? usAqi : null } : null,
-    localIndex: li && isNum(li.aqi) ? { code: li.code, name: li.name, aqi: li.aqi, category: li.category } : null,
+    localIndex: li,
     forecast,
     cleanestHours: hours,
     outlook: outlook(usAqi, hours),

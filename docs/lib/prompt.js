@@ -108,9 +108,11 @@ export function buildPrompt({ place, air, weather }, profile) {
   const guide = BAND_GUIDANCE[air.category.level] ?? BAND_GUIDANCE.unknown;
   const hours = air.cleanestHours.map((h) => `${clock(h.time)} (AQI ${h.aqi})`).join(', ') || 'no forecast';
   const o = air.outlook ?? { improves: false, drop: 0 };
-  const outlookText = o.improves
-    ? `Air improves by about ${o.drop} AQI points at the cleanest hour. Plan outdoor tasks and ventilation then.`
-    : 'No real improvement expected in the next 24 hours. Do not tell people to wait for a better hour.';
+  const outlookText = !air.cleanestHours.length
+    ? 'No hourly forecast is available. Do not mention cleaner hours or forecasts.'
+    : o.improves
+      ? `Air improves by about ${o.drop} AQI points at the cleanest hour. Plan outdoor tasks and ventilation then.`
+      : 'No real improvement expected in the next 24 hours. Do not tell people to wait for a better hour.';
 
   return [
     'AIR DATA',

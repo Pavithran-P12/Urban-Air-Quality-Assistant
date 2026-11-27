@@ -2,12 +2,14 @@
  * Page controller: reads the form, loads the air report (cached per place for a few minutes),
  * asks Gemini for a plan with the rules engine as fallback, and hands both to the views.
  */
-import { getAirReport } from './lib/airQuality.js';
+import { getAirReport, isCacheable } from './lib/airQuality.js';
 import { buildRuleAdvice } from './lib/rules.js';
 import { parseLocation, parseProfile } from './lib/validate.js';
 import { AIR_DATA_FUNCTION_URL, REPORT_CACHE_MS } from './config.js';
 import { fetchAiAdvice } from './api.js';
-import { $, drawChart, renderAdvice, renderAir } from './views.js';
+import { describeForLog, toUserMessage } from './lib/errors.js';
+import { $, announce, announcementText, drawChart, renderAdvice, renderAir } from './views.js';
+import { createLoadingStatus, lockSearchControls } from './busy.js';
 
 function init() {
   const form = $('advice-form');
@@ -19,6 +21,12 @@ function init() {
   let coords = null;
   let busy = false;
   const reportCache = new Map();
+  // Everything that could start a search or change the city shown: quick cities and "use where I am".
+  const searchControls = { cityInput, buttons: [...form.querySelectorAll('.quick-city')] };
+  const status = createLoadingStatus({
+    render: (text) => ($('loading-text').textContent = text),
+    announce,
+  });
 
   /** Look up a place, reusing a recent result for the same place in this tab. */
   async function loadReport(location) {
@@ -28,7 +36,7 @@ function init() {
     const hit = reportCache.get(key);
     if (hit && Date.now() - hit.at < REPORT_CACHE_MS) return hit.report;
     const report = await getAirReport(location, fetch, { airDataUrl: AIR_DATA_FUNCTION_URL });
-    reportCache.set(key, { at: Date.now(), report });
+    if (isCacheable(report)) reportCache.set(key, { at: Date.now(), report });
     return report;
   }
 
@@ -42,13 +50,13 @@ function init() {
     $('form-error').hidden = !msg;
   };
 
-  function setBusy(on, label) {
+  function setBusy(on) {
     busy = on;
     submit.disabled = on;
-    results.setAttribute('aria-busy', String(on));
     submitText.textContent = on ? 'Checking…' : 'Check the air';
     loading.hidden = !on;
-    if (label) $('loading-text').textContent = label;
+    lockSearchControls(searchControls, on);
+    if (!on) status.stop();
   }
 
   function readProfile() {
@@ -72,26 +80,29 @@ function init() {
     try {
       location = parseLocation(coords ?? { city: cityInput.value });
     } catch (err) {
-      showFieldError(err.message);
+      showFieldError(toUserMessage(err));
       cityInput.focus();
       return;
     }
     const profile = readProfile();
 
     results.hidden = true;
-    setBusy(true, 'Checking the air…');
+    setBusy(true);
+    status.checking('Checking the air…');
 
     try {
       const report = await loadReport(location);
       renderAir(report);
-      setBusy(true, 'Writing your plan…');
+      status.step('Writing your plan…');
       const aiAdvice = await fetchAiAdvice(report, profile);
       renderAdvice(aiAdvice ?? buildRuleAdvice(report, profile), aiAdvice ? 'gemini' : 'rules');
 
       setBusy(false);
       results.hidden = false;
       drawChart();
-      results.focus({ preventScroll: true });
+      // Focus the results heading (not the whole section) and announce one short line.
+      $('aqi-place').focus({ preventScroll: true });
+      announce(announcementText(report.place, report.air));
       results.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
       if (location.city) {
@@ -101,7 +112,10 @@ function init() {
       }
     } catch (err) {
       setBusy(false);
-      showError(err.message || "Couldn't reach the air quality service. Check your connection and try again.");
+      // Known app errors carry a user-facing message; anything else gets a generic one.
+      // Only a sanitised summary goes to the console: no stack, URLs or key-like values.
+      console.error('Air check failed', describeForLog(err));
+      showError(toUserMessage(err));
     }
   }
 
@@ -117,6 +131,7 @@ function init() {
 
   form.querySelectorAll('.quick-city[data-city]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (busy) return; // Disabled while busy; this guard keeps the city box in step with the running search.
       cityInput.value = btn.dataset.city;
       coords = null;
       run();
@@ -124,12 +139,14 @@ function init() {
   });
 
   $('locate').addEventListener('click', () => {
+    if (busy) return;
     if (!navigator.geolocation) {
       showFieldError("This browser can't share your location. Type your city instead.");
       return;
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        if (busy) return; // A search started while the browser was asking for permission.
         coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
         cityInput.value = 'Where I am';
         showFieldError('');

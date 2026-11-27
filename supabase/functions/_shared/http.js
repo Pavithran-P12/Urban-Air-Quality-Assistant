@@ -26,9 +26,42 @@ export function corsFor(req, allowedOrigins) {
   return { allowed, headers, json };
 }
 
-/** First address in X-Forwarded-For, or "unknown". */
+/**
+ * Headers set by the platform, in order of trust. On hosted Supabase every request passes through
+ * Cloudflare, which overwrites CF-Connecting-IP with the real client address, and then the Supabase
+ * gateway, which sets X-Real-IP to the same address (verified in this project's edge logs).
+ * Callers cannot forge either: a client-sent value is replaced before the function sees it.
+ *
+ * X-Forwarded-For is deliberately NOT used. A caller can put any address at the front of it, and
+ * the platform only appends the real one, so the first entry is attacker-controlled and the last
+ * entry depends on how many proxies sit in front. Keying a rate limit on it lets one client rotate
+ * through unlimited buckets.
+ */
+export const TRUSTED_IP_HEADERS = Object.freeze(['cf-connecting-ip', 'x-real-ip']);
+
+/** Shared bucket for requests without a trusted client address: limited together, never bypassed. */
+export const UNKNOWN_CLIENT = 'unknown';
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const IPV6 = /^[0-9a-f:]{2,39}$/i;
+
+/** True for a single, syntactically valid IPv4 or IPv6 address (no lists, ports or names). */
+export function isIpAddress(value) {
+  return typeof value === 'string' && (IPV4.test(value) || (value.includes(':') && IPV6.test(value)));
+}
+
+/**
+ * The rate-limit key for a request: the first trusted platform header holding a valid address, or
+ * UNKNOWN_CLIENT. Spoofed X-Forwarded-For values never change the key.
+ * @param {Request} req
+ * @returns {string}
+ */
 export function clientIp(req) {
-  return (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'unknown';
+  for (const name of TRUSTED_IP_HEADERS) {
+    const value = req.headers.get(name)?.trim();
+    if (isIpAddress(value)) return value.toLowerCase();
+  }
+  return UNKNOWN_CLIENT;
 }
 
 /**
