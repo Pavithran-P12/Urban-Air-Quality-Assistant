@@ -5,8 +5,7 @@ import { getAirReport } from '../docs/lib/airQuality.js';
 import { parseProfile } from '../docs/lib/validate.js';
 import { mockFetch, goodAdvice } from './fixtures.js';
 
-const ORIGIN = 'https://pavithran-p12.github.io';
-const silent = { error: () => {} };
+import { ORIGIN, silent } from './helpers.js';
 
 /** Fake Gemini that returns a queue of responses (status + advice), repeating the last one. */
 function geminiFetch(...responses) {

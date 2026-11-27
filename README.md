@@ -93,14 +93,18 @@ Browser (GitHub Pages)
 
 ## Run locally
 
-Requires **Node.js 22+**.
+Requires **Node.js 22.13+ or 24+** (ESLint 10's minimum).
 
 ```bash
 npm run dev     # serves docs/ at http://localhost:3000
-npm test
+npm run check   # lint, type check, format check and tests
 ```
 
-The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. `npm run check` runs ESLint, a Prettier format check and the tests; GitHub Actions runs all three on every push. There are 68 tests covering AQI banding and PM2.5 conversion, input validation, city disambiguation, missing-data fallbacks, the rules engine across AQI levels, prompt grounding, the fact-checking of model output, and both Edge Functions (CORS, origin checks, payload limits, sanitisation, caching, retries and rate limiting), unit conversion, time zones and source fallback.
+The tests use Node's built-in test runner with mocked APIs, so no network or API key is needed. `npm run check` runs ESLint (including size and complexity limits), a TypeScript type check of the JSDoc types (`checkJs`, no build step), a Prettier format check and the tests; GitHub Actions runs all four on every push. The 315 tests cover:
+
+- **Behaviour snapshots** (`test/__snapshots__/behaviour.json`): the normalised report, the exact Gemini prompt and the rules-engine plan for every data source, AQI band and household option. A refactor that changes any of them fails until the change is reviewed and accepted with `UPDATE_SNAPSHOTS=1 npm test`.
+- **Contracts** between the Edge Functions and the browser (what air-data returns is what the browser reads; what the browser sends, air-advice accepts).
+- The search controller (one search at a time, fallbacks, errors, cache), AQI maths, validation, the rules engine, fact-checking of model output, both Edge Functions (CORS, origins, payload limits, rate limiting, timeouts, caching, retries, sanitised logs), units, time zones and accessibility markup.
 
 ## Deploy
 
@@ -110,7 +114,7 @@ The tests use Node's built-in test runner with mocked APIs, so no network or API
 
 1. In Supabase Dashboard → Edge Functions → Secrets, add `GEMINI_API_KEY` (free key at https://aistudio.google.com/apikey) and `GOOGLE_AQ_API_KEY` (a Google Cloud key restricted to the Air Quality API; billing must be enabled, 10,000 calls/month are free).
 2. Optional secrets: `GEMINI_MODEL` (default `gemini-3.5-flash-lite`) and `ALLOWED_ORIGINS` (comma-separated, default `https://pavithran-p12.github.io,http://localhost:3000`).
-3. Deploy: `supabase functions deploy air-advice --no-verify-jwt` and `supabase functions deploy air-data --no-verify-jwt`.
+3. Deploy: `supabase functions deploy air-advice --no-verify-jwt` and `supabase functions deploy air-data --no-verify-jwt`. Each function is bundled with its own copy of the `docs/lib` modules it imports, so they deploy independently.
 4. Set `ADVICE_FUNCTION_URL` and `AIR_DATA_FUNCTION_URL` in `docs/config.js` to your function URLs.
 
 ## Security and quality
@@ -123,24 +127,29 @@ The tests use Node's built-in test runner with mocked APIs, so no network or API
 - Known failures show a specific, friendly message; anything unexpected shows a generic one, with only a sanitised summary (no stack, URLs or keys) logged.
 - Caching: the air-data function caches each ~500 m cell for 15 minutes, and the browser reuses a place's result for 10 minutes, so repeat lookups cost no API calls.
 - Keys travel in headers (`X-Goog-Api-Key`, `x-goog-api-key`), never in URLs, so they don't end up in logs.
-- Edge functions log one JSON line per request (cell, duration, error) for debugging.
+- Edge functions log one JSON line per request (cell, duration, error) for debugging; errors are logged through the same sanitiser as the browser.
 
 ## Accessibility
 
-Semantic HTML landmarks, labelled fields and fieldsets, a skip link, visible focus styles, results announced through `aria-live`, AQI shown as a number and a label (not colour alone), and support for dark mode and reduced motion.
+Semantic HTML landmarks, labelled fields and fieldsets, a skip link, visible focus styles, one polite status line for progress and results (focus moves to the results heading), quick-city buttons that stay focusable but are announced as unavailable during a search (`aria-disabled`), a keyboard-navigable chart with a table view, AQI shown as a number and a label (not colour alone), and support for dark mode and reduced motion.
 
 ## Project structure
 
 ```
 docs/                        static site served by GitHub Pages
   index.html, styles.css     markup and styles (self-hosted Anek fonts in fonts/)
-  app.js                     page controller: form, caching, flow
+  app.js                     page wiring: elements, events, the ui object
+  searchController.js        one search at a time: validate, load (cached), advise, report errors; no DOM
+  busy.js                    busy state: locked controls, loading line and slow-search notice
   views.js                   rendering (textContent only)
   api.js                     client for the Gemini Edge Function
   chart.js                   accessible 48 h forecast chart (SVG + table)
   config.js                  public config (function URLs, cache time)
   lib/                       framework-free logic, shared with the Edge Functions and tests
-    types.js                 JSDoc types for every data shape
+    types.js                 JSDoc types for every data shape (checked by `npm run typecheck`)
+    guards.js                shared value checks (finite number, non-empty text)
+    forecast.js              forecast windows shared by the browser and the air-data function
+    errors.js                user-facing error types and the log sanitiser
     airQuality.js            geocoding, source selection, Open-Meteo fallback
     normalise.js             provider data → one shape (units, time zones)
     sources.js               source labels (provider, modelled/measured, grid size)
@@ -152,12 +161,15 @@ docs/                        static site served by GitHub Pages
     rules.js                 offline advice engine
     validate.js              input validation and sanitisation
 supabase/functions/
-  _shared/http.js            CORS, rate limiter, TTL cache, JSON body reader
-  air-data/                  Google Air Quality API proxy (cached)
+  _shared/http.js            CORS, request checks, rate limiter, TTL cache, JSON body reader
+  air-data/                  Google Air Quality API proxy (cached; imports docs/lib/forecast.js, errors.js)
   air-advice/                Gemini advice (reuses docs/lib modules)
-test/                        unit, data and Edge Function tests (node --test)
-.github/workflows/ci.yml     lint, format check and tests on every push
+test/                        unit, snapshot, contract and Edge Function tests (node --test)
+jsconfig.json                type checking for the JSDoc-typed JavaScript (no build step)
+.github/workflows/ci.yml     lint, type check, format check and tests on every push
 ```
+
+The Edge Functions import modules from `docs/lib/` rather than a separate shared folder because the site has no build step: GitHub Pages can only serve files under `docs/`, so that is where the browser and the functions share code.
 
 ## Disclaimer
 
