@@ -6,13 +6,11 @@ import { getAirReport } from '../docs/lib/airQuality.js';
 import { buildPrompt } from '../docs/lib/prompt.js';
 import { parseProfile, sanitizeReport } from '../docs/lib/validate.js';
 import * as aqi from '../docs/lib/aqi.js';
-import { cellKey, createAirDataHandler, fetchGoogleAir } from '../supabase/functions/air-data/handler.js';
+import { cellKey, createAirDataHandler, lookupGoogleAir } from '../supabase/functions/air-data/handler.js';
 import { createTtlCache, createRateLimiter, parseOrigins } from '../supabase/functions/_shared/http.js';
 import { mockFetch, googleResponse, weatherResponse } from './fixtures.js';
 
-const ORIGIN = 'https://pavithran-p12.github.io';
-const AIR_DATA = 'https://x.supabase.co/functions/v1/air-data';
-const silent = { error: () => {}, info: () => {} };
+import { ORIGIN, AIR_DATA_URL as AIR_DATA, silent } from './helpers.js';
 
 describe('normalise', () => {
   test('converts ppb to µg/m³ with the 25 °C molar volume', () => {
@@ -187,7 +185,7 @@ describe('air-data edge function', () => {
 
   test('fetches current + 48 h forecast, trims it, keeps the key in a header', async () => {
     const fetchImpl = googleFetch({ pages: 2 });
-    const data = await fetchGoogleAir({
+    const data = await lookupGoogleAir({
       latitude: 13.08,
       longitude: 80.27,
       apiKey: 'gkey',

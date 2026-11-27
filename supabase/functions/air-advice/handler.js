@@ -7,15 +7,17 @@ import { ADVICE_SCHEMA, SYSTEM_INSTRUCTION, buildPrompt } from '../../../docs/li
 import * as aqi from '../../../docs/lib/aqi.js';
 import { parseProfile, sanitizeReport } from '../../../docs/lib/validate.js';
 import { AdviceError, normaliseAdvice } from '../../../docs/lib/advice.js';
-import { clientIp, corsFor, createRateLimiter, readJson } from '../_shared/http.js';
+import { describeForLog } from '../../../docs/lib/errors.js';
+import { corsFor, createRateLimiter, readJson, rejectRequest } from '../_shared/http.js';
 
 export { createRateLimiter };
 
-export const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const MAX_BODY_BYTES = 10_000;
 const GEMINI_TIMEOUT_MS = 20_000;
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const GATE_MESSAGES = { notConfigured: 'AI is not configured', tooMany: 'Too many requests. Please wait a minute.' };
 
 class GeminiError extends Error {
   constructor(message, retryable) {
@@ -25,7 +27,36 @@ class GeminiError extends Error {
   }
 }
 
-/** One Gemini call with a strict JSON response schema. Low temperature for factual consistency. */
+/** The generateContent request body: system rules, the grounded prompt and a strict JSON schema. */
+function geminiBody(report, profile) {
+  return {
+    systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+    contents: [{ role: 'user', parts: [{ text: buildPrompt(report, profile) }] }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseJsonSchema: ADVICE_SCHEMA,
+      temperature: 0.3, // low, for factual consistency
+      maxOutputTokens: 2000,
+    },
+  };
+}
+
+/** The model's text, joined across parts ('' when there is none). */
+function responseText(data) {
+  const parts = data?.candidates?.[0]?.content?.parts;
+  return Array.isArray(parts) ? parts.map((p) => p?.text ?? '').join('') : '';
+}
+
+/** Parse and fact-check the model's JSON. Malformed or ungrounded output is worth one more try. */
+function parseAdvice(text, air) {
+  try {
+    return normaliseAdvice(JSON.parse(text), air);
+  } catch (err) {
+    throw new GeminiError(err instanceof AdviceError ? err.message : 'Gemini returned invalid JSON', true);
+  }
+}
+
+/** One Gemini call. Network failures, retryable statuses and empty or bad output are retryable. */
 async function requestGemini({ report, profile, apiKey, model, fetchImpl }) {
   let res;
   try {
@@ -33,30 +64,15 @@ async function requestGemini({ report, profile, apiKey, model, fetchImpl }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-        contents: [{ role: 'user', parts: [{ text: buildPrompt(report, profile) }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseJsonSchema: ADVICE_SCHEMA,
-          temperature: 0.3,
-          maxOutputTokens: 2000,
-        },
-      }),
+      body: JSON.stringify(geminiBody(report, profile)),
     });
   } catch (err) {
     throw new GeminiError(`Gemini unreachable: ${err.message}`, true);
   }
   if (!res.ok) throw new GeminiError(`Gemini returned ${res.status}`, RETRYABLE.has(res.status));
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('');
+  const text = responseText(await res.json());
   if (!text) throw new GeminiError('Gemini returned no content', true);
-  try {
-    return normaliseAdvice(JSON.parse(text), report.air);
-  } catch (err) {
-    // Malformed or ungrounded output: worth one more try.
-    throw new GeminiError(err instanceof AdviceError ? err.message : 'Gemini returned invalid JSON', true);
-  }
+  return parseAdvice(text, report.air);
 }
 
 /**
@@ -89,13 +105,10 @@ export function createHandler({
   retryDelayMs,
 }) {
   return async function handle(req) {
-    const { allowed, headers, json } = corsFor(req, allowedOrigins);
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-    if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
-    if (!allowed) return json(403, { error: 'Origin not allowed' });
-    if (!apiKey) return json(503, { error: 'AI is not configured' });
-    if (!rateLimiter(clientIp(req)))
-      return json(429, { error: 'Too many requests. Please wait a minute.' }, { 'Retry-After': '60' });
+    const cors = corsFor(req, allowedOrigins);
+    const { json } = cors;
+    const rejected = rejectRequest(req, { cors, configured: Boolean(apiKey), rateLimiter, messages: GATE_MESSAGES });
+    if (rejected) return rejected;
 
     const { body, error } = await readJson(req, MAX_BODY_BYTES);
     if (error) return json(error.status, { error: error.message });
@@ -112,7 +125,7 @@ export function createHandler({
       const advice = await callGemini({ report, profile, apiKey, model, fetchImpl, retryDelayMs });
       return json(200, { advice, source: 'gemini' });
     } catch (err) {
-      logger.error('Gemini call failed:', err.message);
+      logger.error(JSON.stringify({ fn: 'air-advice', error: describeForLog(err) }));
       return json(502, { error: 'AI service unavailable' });
     }
   };

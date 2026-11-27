@@ -3,7 +3,9 @@
  * Keeps the Google key server-side, trims responses to what the app needs, and caches per
  * ~500 m cell so repeat lookups cost nothing. Pure (fetch, clock and config injected) for testing.
  */
-import { clientIp, corsFor, createRateLimiter, createTtlCache, readJson } from '../_shared/http.js';
+import { corsFor, createRateLimiter, createTtlCache, readJson, rejectRequest } from '../_shared/http.js';
+import { FORECAST_HOURS, MIN_COMPLETE_HOURS } from '../../../docs/lib/forecast.js';
+import { describeForLog } from '../../../docs/lib/errors.js';
 
 const AQ_URL = 'https://airquality.googleapis.com/v1';
 /**
@@ -13,13 +15,16 @@ const AQ_URL = 'https://airquality.googleapis.com/v1';
  * never gives up while the function is still inside its budget.
  */
 export const SERVER_BUDGET_MS = 9000;
-const FORECAST_HOURS = 48;
 const MAX_FORECAST_PAGES = 2;
-/** Minimum hours for a forecast to count as complete (and therefore cacheable). */
-export const MIN_COMPLETE_HOURS = 24;
 const MAX_BODY_BYTES = 1000;
+const HOUR_MS = 3_600_000;
+const CACHE_TTL_MS = 15 * 60_000;
+const GATE_MESSAGES = { notConfigured: 'Google Air Quality is not configured', tooMany: 'Too many requests' };
+const CURRENT_EXTRAS = ['LOCAL_AQI', 'POLLUTANT_CONCENTRATION', 'DOMINANT_POLLUTANT_CONCENTRATION'];
+const FORECAST_EXTRAS = ['LOCAL_AQI', 'POLLUTANT_CONCENTRATION'];
 
-export class GoogleAqError extends Error {
+/** An internal failure talking to Google. Logged (sanitised) only; clients get a generic message. */
+class GoogleAqError extends Error {
   constructor(message, status = 502) {
     super(message);
     this.name = 'GoogleAqError';
@@ -52,9 +57,11 @@ function localIndex(indexes) {
 
 /**
  * POST to the Air Quality API, aborting when the shared deadline passes.
- * @param {number} deadline epoch ms by which the call must finish
+ * @param {{fetchImpl:typeof fetch, apiKey:string, deadline:number}} client deadline is epoch ms
+ * @param {string} path e.g. "currentConditions:lookup"
+ * @param {object} body
  */
-async function post(fetchImpl, path, apiKey, body, deadline) {
+async function post({ fetchImpl, apiKey, deadline }, path, body) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new GoogleAqError('Google Air Quality time budget exhausted');
   let res;
@@ -72,73 +79,47 @@ async function post(fetchImpl, path, apiKey, body, deadline) {
   return res.json();
 }
 
+/** The forecast window: the next FORECAST_HOURS whole hours, starting at the coming hour. */
+function forecastPeriod(nowMs) {
+  const start = new Date(Math.floor(nowMs / HOUR_MS) * HOUR_MS + HOUR_MS);
+  const end = new Date(start.getTime() + (FORECAST_HOURS - 1) * HOUR_MS);
+  return { startTime: start.toISOString(), endTime: end.toISOString() };
+}
+
 /**
- * Fetch current conditions and a 48 h hourly forecast, trimmed, within one time budget.
- * Current conditions are required; a failed or slow forecast is reported as incomplete instead of
- * failing the whole lookup, so the app still shows today's reading.
- * @returns {Promise<{provider:string, resolutionM:number, current:object, hourly:object[], forecastComplete:boolean}>}
+ * Collect forecast pages into `hours` (up to MAX_FORECAST_PAGES). Pages that arrived are kept
+ * even if a later page fails, so the caller can still show a partial forecast.
  */
-export async function fetchGoogleAir({
-  latitude,
-  longitude,
-  apiKey,
-  fetchImpl,
-  now = Date.now,
-  budgetMs = SERVER_BUDGET_MS,
-  logger = console,
-}) {
-  const deadline = Date.now() + budgetMs;
-  const location = { latitude, longitude };
-  const extraComputations = ['LOCAL_AQI', 'POLLUTANT_CONCENTRATION', 'DOMINANT_POLLUTANT_CONCENTRATION'];
-  const start = new Date(Math.floor(now() / 3_600_000) * 3_600_000 + 3_600_000);
-  const end = new Date(start.getTime() + (FORECAST_HOURS - 1) * 3_600_000);
+async function collectForecast(client, location, period, hours) {
+  let pageToken;
+  for (let page = 0; page < MAX_FORECAST_PAGES && hours.length < FORECAST_HOURS; page += 1) {
+    const data = await post(client, 'forecast:lookup', {
+      location,
+      period,
+      pageSize: FORECAST_HOURS,
+      universalAqi: false,
+      extraComputations: FORECAST_EXTRAS,
+      ...(pageToken ? { pageToken } : {}),
+    });
+    hours.push(...(data.hourlyForecasts ?? []));
+    pageToken = data.nextPageToken;
+    if (!pageToken) break;
+  }
+}
 
-  const collected = [];
-  const forecastPages = async () => {
-    const hours = collected;
-    let pageToken;
-    for (let page = 0; page < MAX_FORECAST_PAGES && hours.length < FORECAST_HOURS; page += 1) {
-      const data = await post(
-        fetchImpl,
-        'forecast:lookup',
-        apiKey,
-        {
-          location,
-          period: { startTime: start.toISOString(), endTime: end.toISOString() },
-          pageSize: FORECAST_HOURS,
-          universalAqi: false,
-          extraComputations: ['LOCAL_AQI', 'POLLUTANT_CONCENTRATION'],
-          ...(pageToken ? { pageToken } : {}),
-        },
-        deadline,
-      );
-      hours.push(...(data.hourlyForecasts ?? []));
-      pageToken = data.nextPageToken;
-      if (!pageToken) break;
-    }
-    return hours.slice(0, FORECAST_HOURS);
-  };
+/** The forecast, or whatever part of it arrived: a failed or slow forecast never fails the lookup. */
+async function forecastOrPartial(client, location, period, logger) {
+  const hours = [];
+  try {
+    await collectForecast(client, location, period, hours);
+  } catch (err) {
+    logger.error(JSON.stringify({ fn: 'air-data', part: 'forecast', error: describeForLog(err) }));
+  }
+  return hours.slice(0, FORECAST_HOURS);
+}
 
-  const forecastOrPartial = async () => {
-    try {
-      return await forecastPages();
-    } catch (err) {
-      logger.error(JSON.stringify({ fn: 'air-data', part: 'forecast', error: err.message }));
-      return collected.slice(0, FORECAST_HOURS); // keep any pages that did arrive
-    }
-  };
-
-  const [current, hours] = await Promise.all([
-    post(
-      fetchImpl,
-      'currentConditions:lookup',
-      apiKey,
-      { location, universalAqi: false, extraComputations, languageCode: 'en' },
-      deadline,
-    ),
-    forecastOrPartial(),
-  ]);
-
+/** Trim Google's responses to what the browser reads (see test/contract.test.js). */
+function trimResponse(current, hours) {
   return {
     provider: 'google',
     resolutionM: 500,
@@ -158,9 +139,49 @@ export async function fetchGoogleAir({
 }
 
 /**
+ * Fetch current conditions and a 48 h hourly forecast, trimmed, within one time budget.
+ * Current conditions are required; a failed or slow forecast is reported as incomplete instead of
+ * failing the whole lookup, so the app still shows today's reading.
+ * @param {{latitude:number, longitude:number, apiKey:string, fetchImpl:typeof fetch, now?:() => number,
+ *   budgetMs?:number, logger?:Pick<Console,'error'>}} options
+ * @returns {Promise<{provider:string, resolutionM:number, current:object, hourly:object[], forecastComplete:boolean}>}
+ */
+export async function lookupGoogleAir({
+  latitude,
+  longitude,
+  apiKey,
+  fetchImpl,
+  now = Date.now,
+  budgetMs = SERVER_BUDGET_MS,
+  logger = console,
+}) {
+  const client = { fetchImpl, apiKey, deadline: Date.now() + budgetMs };
+  const location = { latitude, longitude };
+  const [current, hours] = await Promise.all([
+    post(client, 'currentConditions:lookup', {
+      location,
+      universalAqi: false,
+      extraComputations: CURRENT_EXTRAS,
+      languageCode: 'en',
+    }),
+    forecastOrPartial(client, location, forecastPeriod(now()), logger),
+  ]);
+  return trimResponse(current, hours);
+}
+
+/** Valid coordinates from a request body, or null. */
+function readCoordinates(body) {
+  const lat = Number(body?.latitude);
+  const lon = Number(body?.longitude);
+  const valid = Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+  return valid ? { lat, lon } : null;
+}
+
+/**
  * Build the request handler.
  * @param {{apiKey?:string, allowedOrigins:string[], fetchImpl?:typeof fetch, logger?:Pick<Console,'error'|'info'>,
- *   rateLimiter?:(key:string)=>boolean, cache?:ReturnType<typeof createTtlCache>, now?:()=>number}} cfg
+ *   rateLimiter?:(key:string)=>boolean, cache?:ReturnType<typeof createTtlCache>, now?:()=>number,
+ *   budgetMs?:number}} cfg
  */
 export function createAirDataHandler({
   apiKey,
@@ -168,48 +189,37 @@ export function createAirDataHandler({
   fetchImpl = fetch,
   logger = console,
   rateLimiter = createRateLimiter({ limit: 30 }),
-  cache = createTtlCache({ ttlMs: 15 * 60_000 }),
+  cache = createTtlCache({ ttlMs: CACHE_TTL_MS }),
   now = Date.now,
   budgetMs = SERVER_BUDGET_MS,
 }) {
-  return async function handle(req) {
-    const { allowed, headers, json } = corsFor(req, allowedOrigins);
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-    if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
-    if (!allowed) return json(403, { error: 'Origin not allowed' });
-    if (!apiKey) return json(503, { error: 'Google Air Quality is not configured' });
-    if (!rateLimiter(clientIp(req))) return json(429, { error: 'Too many requests' }, { 'Retry-After': '60' });
-
-    const { body, error } = await readJson(req, MAX_BODY_BYTES);
-    if (error) return json(error.status, { error: error.message });
-    const lat = Number(body?.latitude);
-    const lon = Number(body?.longitude);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
-      return json(400, { error: 'Invalid coordinates' });
-    }
-
+  /** Serve one ~500 m cell: from cache, or from Google (caching only complete answers). */
+  async function lookupCell({ lat, lon }, json) {
     const key = cellKey(lat, lon);
     const hit = cache.get(key);
     if (hit) return json(200, hit, { 'X-Cache': 'HIT' });
-
     const started = now();
     try {
-      const data = await fetchGoogleAir({ latitude: lat, longitude: lon, apiKey, fetchImpl, now, budgetMs, logger });
+      const data = await lookupGoogleAir({ latitude: lat, longitude: lon, apiKey, fetchImpl, now, budgetMs, logger });
       // Only complete answers are cached, so a transient forecast failure isn't repeated for 15 min.
       if (data.forecastComplete) cache.set(key, data);
-      logger.info(
-        JSON.stringify({
-          fn: 'air-data',
-          cell: key,
-          ms: now() - started,
-          hours: data.hourly.length,
-          complete: data.forecastComplete,
-        }),
-      );
+      const log = { fn: 'air-data', cell: key, ms: now() - started, hours: data.hourly.length };
+      logger.info(JSON.stringify({ ...log, complete: data.forecastComplete }));
       return json(200, data, { 'X-Cache': 'MISS' });
     } catch (err) {
-      logger.error(JSON.stringify({ fn: 'air-data', cell: key, error: err.message }));
+      logger.error(JSON.stringify({ fn: 'air-data', cell: key, error: describeForLog(err) }));
       return json(err.status === 400 ? 400 : 502, { error: 'Air quality data unavailable for this location' });
     }
+  }
+
+  return async function handle(req) {
+    const cors = corsFor(req, allowedOrigins);
+    const rejected = rejectRequest(req, { cors, configured: Boolean(apiKey), rateLimiter, messages: GATE_MESSAGES });
+    if (rejected) return rejected;
+    const { body, error } = await readJson(req, MAX_BODY_BYTES);
+    if (error) return cors.json(error.status, { error: error.message });
+    const point = readCoordinates(body);
+    if (!point) return cors.json(400, { error: 'Invalid coordinates' });
+    return lookupCell(point, cors.json);
   };
 }

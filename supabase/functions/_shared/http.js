@@ -37,7 +37,7 @@ export function corsFor(req, allowedOrigins) {
  * entry depends on how many proxies sit in front. Keying a rate limit on it lets one client rotate
  * through unlimited buckets.
  */
-export const TRUSTED_IP_HEADERS = Object.freeze(['cf-connecting-ip', 'x-real-ip']);
+const TRUSTED_IP_HEADERS = Object.freeze(['cf-connecting-ip', 'x-real-ip']);
 
 /** Shared bucket for requests without a trusted client address: limited together, never bypassed. */
 export const UNKNOWN_CLIENT = 'unknown';
@@ -62,6 +62,23 @@ export function clientIp(req) {
     if (isIpAddress(value)) return value.toLowerCase();
   }
   return UNKNOWN_CLIENT;
+}
+
+/**
+ * The checks every function runs before reading the body, in this order: CORS preflight, method,
+ * origin, configuration, rate limit. Returns the response to send, or null to carry on.
+ * @param {Request} req
+ * @param {{cors:ReturnType<typeof corsFor>, configured:boolean, rateLimiter:(key:string)=>boolean,
+ *   messages:{notConfigured:string, tooMany:string}}} options
+ * @returns {Response|null}
+ */
+export function rejectRequest(req, { cors, configured, rateLimiter, messages }) {
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors.headers });
+  if (req.method !== 'POST') return cors.json(405, { error: 'Method not allowed' });
+  if (!cors.allowed) return cors.json(403, { error: 'Origin not allowed' });
+  if (!configured) return cors.json(503, { error: messages.notConfigured });
+  if (!rateLimiter(clientIp(req))) return cors.json(429, { error: messages.tooMany }, { 'Retry-After': '60' });
+  return null;
 }
 
 /**

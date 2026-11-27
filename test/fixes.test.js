@@ -22,7 +22,7 @@ import { localIndexText, announcementText } from '../docs/views.js';
 import { clientIp, createRateLimiter, UNKNOWN_CLIENT, isIpAddress } from '../supabase/functions/_shared/http.js';
 import {
   createAirDataHandler,
-  fetchGoogleAir as fetchGoogleAirServer,
+  lookupGoogleAir as fetchGoogleAirServer,
 } from '../supabase/functions/air-data/handler.js';
 import * as aqi from '../docs/lib/aqi.js';
 import { mockFetch, googleResponse } from './fixtures.js';
