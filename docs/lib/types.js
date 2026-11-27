@@ -23,7 +23,7 @@
  * @property {number} usAqi
  * @property {boolean} aqiEstimated                True when US AQI was computed from PM2.5
  * @property {string} aqiMethod
- * @property {{max:number, level:string, label:string, color:string}} category
+ * @property {{max:number, level:string, label:string}} category
  * @property {Record<'pm2_5'|'pm10'|'nitrogen_dioxide'|'ozone'|'carbon_monoxide', number|null>} pollutants  µg/m³
  * @property {number|null} pm25WhoMultiple
  * @property {{key:string, name:string, aqi:number|null}|null} dominant
@@ -31,7 +31,7 @@
  * @property {HourAqi[]} [forecast]                Up to 48 hourly values
  * @property {HourAqi[]} cleanestHours             Best 3 of the next 24 hours, in time order
  * @property {{improves:boolean, bestAqi:number|null, drop:number}} outlook
- * @property {import('./sources.js').SourceInfo & {updated?:string}} source
+ * @property {import('./sources.js').SourceInfo & {updated?:string, fallback?:boolean, fallbackReason?:string}} source  fallback: Google was asked for but Open-Meteo answered
  */
 
 /**
@@ -60,14 +60,30 @@
  * @property {string} question     Sanitised free text, may be empty
  */
 
+/** @typedef {{time:string, action:string, why:string}} RoutineStep */
+/** @typedef {{tip:string, why:string, cost:'free'|'low'|'medium'}} IndoorTip */
+/** @typedef {{instead:string, try:string, impact:string, impactLevel:'high'|'medium'|'low'}} Swap */
+
 /**
  * @typedef {object} Advice  Shared by Gemini output and the rules engine (see ADVICE_SCHEMA).
  * @property {string} summary
  * @property {string} riskNote
- * @property {{time:string, action:string, why:string}[]} routine
- * @property {{tip:string, why:string, cost:'free'|'low'|'medium'}[]} indoor
- * @property {{instead:string, try:string, impact:string, impactLevel:'high'|'medium'|'low'}[]} alternatives
+ * @property {RoutineStep[]} routine
+ * @property {IndoorTip[]} indoor
+ * @property {Swap[]} alternatives
  * @property {string} answer
+ */
+
+/**
+ * @typedef {object} GeocodeResult  One Open-Meteo geocoding match (fields we read).
+ * @property {string} name
+ * @property {number} latitude
+ * @property {number} longitude
+ * @property {string} [admin1]
+ * @property {string} [admin2]
+ * @property {string} [country]
+ * @property {string} [country_code]
+ * @property {string} [timezone]
  */
 
 export {};

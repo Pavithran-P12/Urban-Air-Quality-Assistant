@@ -1,8 +1,7 @@
-import { categorize, cleanestHours, dominantPollutant, outlook, pm25Multiple, pm25ToUsAqi } from './aqi.js';
-import { fromGoogle } from './normalise.js';
-import { SOURCES } from './sources.js';
+import { fromGoogle, fromOpenMeteo, OPEN_METEO_SUB_INDEX } from './normalise.js';
 import { UpstreamError } from './errors.js';
 import { fetchWeather, summariseWeather } from './weather.js';
+import { MIN_COMPLETE_HOURS } from './forecast.js';
 
 const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 const AIR_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
@@ -13,16 +12,7 @@ const TIMEOUT_MS = 8000;
  */
 export const AIR_DATA_TIMEOUT_MS = 11_000;
 /** Shown when Google was asked for but didn't answer, so the coarser fallback is never silent. */
-export const GOOGLE_FALLBACK_REASON = "Google's 500 m data wasn't available just now";
-
-const SUB_INDEX_FIELDS = {
-  pm2_5: 'us_aqi_pm2_5',
-  pm10: 'us_aqi_pm10',
-  nitrogen_dioxide: 'us_aqi_nitrogen_dioxide',
-  ozone: 'us_aqi_ozone',
-  carbon_monoxide: 'us_aqi_carbon_monoxide',
-  sulphur_dioxide: 'us_aqi_sulphur_dioxide',
-};
+const GOOGLE_FALLBACK_REASON = "Google's 500 m data wasn't available just now";
 
 export { UpstreamError };
 
@@ -52,8 +42,9 @@ const norm = (s) =>
 /**
  * Pick the best geocoding match. "Hyderabad, Pakistan" or "Portland, Maine" prefers results whose
  * region/country match the text after the comma; otherwise the API's top (most populous) result wins.
- * @param {object[]} results
+ * @param {import('./types.js').GeocodeResult[]|undefined} results
  * @param {string} [qualifier]
+ * @returns {import('./types.js').GeocodeResult|null}
  */
 export function pickPlace(results, qualifier) {
   if (!results?.length) return null;
@@ -108,79 +99,36 @@ export async function fetchAirQuality(latitude, longitude, fetchImpl = fetch) {
       'nitrogen_dioxide',
       'ozone',
       'carbon_monoxide',
-      ...Object.values(SUB_INDEX_FIELDS),
+      ...Object.values(OPEN_METEO_SUB_INDEX),
     ].join(','),
     hourly: 'us_aqi,pm2_5',
     forecast_days: '2',
     timezone: 'auto',
   });
   const data = await getJson(`${AIR_URL}?${params}`, fetchImpl);
-  const c = data?.current;
-  if (!c) throw new UpstreamError('Air quality data is unavailable for this location.');
-
-  let usAqi = c.us_aqi;
-  let aqiEstimated = false;
-  if (typeof usAqi !== 'number') {
-    usAqi = pm25ToUsAqi(c.pm2_5);
-    aqiEstimated = usAqi !== null;
-  }
-  if (usAqi === null) {
+  if (!data?.current) throw new UpstreamError('Air quality data is unavailable for this location.');
+  const air = fromOpenMeteo(data);
+  if (!air) {
     throw new UpstreamError(
       'No air quality readings are available for this location right now. Try a nearby city.',
       404,
     );
   }
-
-  // Only look at hours from "now" onward; fill missing hourly AQI from hourly PM2.5.
-  const times = data.hourly?.time ?? [];
-  const startIdx = Math.max(
-    0,
-    times.findIndex((t) => t >= c.time),
-  );
-  const hourly = {
-    time: times.slice(startIdx),
-    us_aqi: times.slice(startIdx).map((_, i) => {
-      const v = data.hourly?.us_aqi?.[startIdx + i];
-      return typeof v === 'number' ? v : pm25ToUsAqi(data.hourly?.pm2_5?.[startIdx + i]);
-    }),
-  };
-
-  const hours = cleanestHours(hourly);
-  const forecast = hourly.time
-    .slice(0, 48)
-    .map((time, i) => ({ time, aqi: hourly.us_aqi[i] }))
-    .filter((h) => typeof h.aqi === 'number');
-  const subIndices = Object.fromEntries(Object.entries(SUB_INDEX_FIELDS).map(([key, field]) => [key, c[field]]));
-
-  return {
-    time: c.time,
-    usAqi,
-    aqiEstimated,
-    aqiMethod: aqiEstimated ? 'US AQI from PM2.5 (EPA formula)' : 'US AQI from CAMS',
-    category: categorize(usAqi),
-    pollutants: {
-      pm2_5: c.pm2_5,
-      pm10: c.pm10,
-      nitrogen_dioxide: c.nitrogen_dioxide,
-      ozone: c.ozone,
-      carbon_monoxide: c.carbon_monoxide,
-    },
-    pm25WhoMultiple: pm25Multiple(c.pm2_5),
-    dominant: dominantPollutant(subIndices),
-    localIndex: null,
-    forecast,
-    cleanestHours: hours,
-    outlook: outlook(usAqi, hours),
-    source: { ...SOURCES['open-meteo'], updated: c.time },
-  };
+  return air;
 }
 
 /**
  * Ask the air-data Edge Function (Google Air Quality API, 500 m) for a location.
  * Returns null on any failure so the caller can fall back to Open-Meteo.
  * @param {string|undefined} url
+ * @param {{latitude:number, longitude:number}} point
+ * @param {{fetchImpl?:typeof fetch, timeoutMs?:number}} [options]
  */
-export async function fetchGoogleAir(url, latitude, longitude, fetchImpl = fetch, timeoutMs = AIR_DATA_TIMEOUT_MS) {
+export async function fetchGoogleAir(
+  url,
+  { latitude, longitude },
+  { fetchImpl = fetch, timeoutMs = AIR_DATA_TIMEOUT_MS } = {},
+) {
   if (!url) return null;
   try {
     const res = await fetchImpl(url, {
@@ -205,28 +153,35 @@ export async function fetchGoogleAir(url, latitude, longitude, fetchImpl = fetch
  * @returns {Promise<import('./types.js').AirReport>}
  */
 export async function getAirReport(loc, fetchImpl = fetch, { airDataUrl, airDataTimeoutMs } = {}) {
-  let place;
-  if (typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
-    place = { name: 'Your location', latitude: loc.latitude, longitude: loc.longitude, timezone: null };
-  } else {
-    place = await geocode(loc.city, fetchImpl);
-  }
-
+  const place = await resolvePlace(loc, fetchImpl);
   const [google, weather] = await Promise.all([
-    fetchGoogleAir(airDataUrl, place.latitude, place.longitude, fetchImpl, airDataTimeoutMs),
+    fetchGoogleAir(airDataUrl, place, { fetchImpl, timeoutMs: airDataTimeoutMs }),
     fetchWeather(place.latitude, place.longitude, fetchImpl),
   ]);
-  const tz = { offsetSeconds: weather?.offsetSeconds ?? null, timeZone: weather?.timeZone ?? place.timezone ?? null };
-
-  let air = google ? fromGoogle(google, tz) : null;
-  if (!air) {
-    air = await fetchAirQuality(place.latitude, place.longitude, fetchImpl);
-    // Google was asked for but didn't answer: say so, rather than silently showing coarser data.
-    if (airDataUrl) air.source = { ...air.source, fallback: true, fallbackReason: GOOGLE_FALLBACK_REASON };
-  }
-
+  const air =
+    (google && fromGoogle(google, timeZoneHints(weather, place))) || (await fallbackAir(place, fetchImpl, airDataUrl));
   const bestHour = air.cleanestHours.find((h) => h.aqi === air.outlook.bestAqi);
   return { place, air, weather: summariseWeather(weather, bestHour, air.time), weatherHours: weather?.hourly ?? [] };
+}
+
+/** Coordinates are used as given; a city name is geocoded. */
+async function resolvePlace(loc, fetchImpl) {
+  if (typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+    return { name: 'Your location', latitude: loc.latitude, longitude: loc.longitude, timezone: null };
+  }
+  return geocode(loc.city, fetchImpl);
+}
+
+/** Best available clues for converting Google's UTC times to local time. */
+function timeZoneHints(weather, place) {
+  return { offsetSeconds: weather?.offsetSeconds ?? null, timeZone: weather?.timeZone ?? place.timezone ?? null };
+}
+
+/** Open-Meteo data. If Google was asked for but didn't answer, say so rather than silently showing coarser data. */
+async function fallbackAir(place, fetchImpl, airDataUrl) {
+  const air = await fetchAirQuality(place.latitude, place.longitude, fetchImpl);
+  if (airDataUrl) air.source = { ...air.source, fallback: true, fallbackReason: GOOGLE_FALLBACK_REASON };
+  return air;
 }
 
 /**
@@ -236,5 +191,5 @@ export async function getAirReport(loc, fetchImpl = fetch, { airDataUrl, airData
  * @returns {boolean}
  */
 export function isCacheable(report) {
-  return !report?.air?.source?.fallback && (report?.air?.forecast?.length ?? 0) >= 24;
+  return !report?.air?.source?.fallback && (report?.air?.forecast?.length ?? 0) >= MIN_COMPLETE_HOURS;
 }

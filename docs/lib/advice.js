@@ -7,9 +7,20 @@
 const MAX_LEN = 400;
 const COSTS = ['free', 'low', 'medium'];
 const LEVELS = ['high', 'medium', 'low'];
+/** How far (in AQI points) a quoted number may be from a real one before it counts as made up. */
+const GROUNDING_TOLERANCE = 5;
 
 const text = (v, max = MAX_LEN) => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 
+/**
+ * Keep list items that have every required field, as trimmed strings; enum fields fall back to a
+ * default when the value is not allowed.
+ * @param {unknown} list
+ * @param {string[]} fields required text fields
+ * @param {number} max
+ * @param {Record<string, {allowed:string[], fallback:string}>} [defaults]
+ * @returns {Record<string, string>[]}
+ */
 function cleanList(list, fields, max, defaults = {}) {
   if (!Array.isArray(list)) return [];
   return list
@@ -43,10 +54,11 @@ export function quotedAqis(s) {
 
 /**
  * Every AQI the advice quotes must match a value we actually gave it (within a small tolerance).
- * @param {object} advice
- * @param {{usAqi:number, cleanestHours:{aqi:number}[]}} air
+ * @param {import('./types.js').Advice} advice
+ * @param {{usAqi:number, cleanestHours:{aqi:number}[], dominant?:{aqi:number|null}|null,
+ *   localIndex?:{aqi:number}|null}} air
  */
-export function isGrounded(advice, air, tolerance = 5) {
+export function isGrounded(advice, air, tolerance = GROUNDING_TOLERANCE) {
   const known = [air.usAqi, ...air.cleanestHours.map((h) => h.aqi), air.dominant?.aqi, air.localIndex?.aqi].filter(
     (n) => typeof n === 'number',
   );
@@ -66,21 +78,35 @@ export function isGrounded(advice, air, tolerance = 5) {
  * @returns {import('./types.js').Advice}
  */
 export function normaliseAdvice(data, air) {
-  const advice = {
-    summary: text(data?.summary, 600),
-    riskNote: text(data?.riskNote, 600),
-    routine: cleanList(data?.routine, ['time', 'action', 'why'], 6),
-    indoor: cleanList(data?.indoor, ['tip', 'why'], 6, { cost: { allowed: COSTS, fallback: 'low' } }),
-    alternatives: cleanList(data?.alternatives, ['instead', 'try', 'impact'], 5, {
-      impactLevel: { allowed: LEVELS, fallback: 'medium' },
-    }),
-    answer: text(data?.answer, 600),
-  };
-  if (!advice.summary || advice.routine.length < 2 || advice.indoor.length < 2) {
-    throw new AdviceError('Advice is incomplete.');
-  }
-  if (air && !isGrounded(advice, air)) {
-    throw new AdviceError('Advice quotes AQI values that are not in the data.');
-  }
+  const advice = cleanAdvice(data ?? {});
+  if (!isComplete(advice)) throw new AdviceError('Advice is incomplete.');
+  if (air && !isGrounded(advice, air)) throw new AdviceError('Advice quotes AQI values that are not in the data.');
   return advice;
 }
+
+/**
+ * Trim, cap and default every field; drop list items missing a required field.
+ * The casts are safe: cleanList guarantees each listed field is a non-empty string and each enum
+ * field is one of its allowed values.
+ * @param {any} data parsed model output (untrusted)
+ * @returns {import('./types.js').Advice}
+ */
+function cleanAdvice(data) {
+  return {
+    summary: text(data.summary, 600),
+    riskNote: text(data.riskNote, 600),
+    routine: /** @type {import('./types.js').RoutineStep[]} */ (cleanList(data.routine, ['time', 'action', 'why'], 6)),
+    indoor: /** @type {import('./types.js').IndoorTip[]} */ (
+      cleanList(data.indoor, ['tip', 'why'], 6, { cost: { allowed: COSTS, fallback: 'low' } })
+    ),
+    alternatives: /** @type {import('./types.js').Swap[]} */ (
+      cleanList(data.alternatives, ['instead', 'try', 'impact'], 5, {
+        impactLevel: { allowed: LEVELS, fallback: 'medium' },
+      })
+    ),
+    answer: text(data.answer, 600),
+  };
+}
+
+/** Enough to show: a summary, at least two routine steps and two indoor tips. */
+const isComplete = (advice) => Boolean(advice.summary) && advice.routine.length >= 2 && advice.indoor.length >= 2;

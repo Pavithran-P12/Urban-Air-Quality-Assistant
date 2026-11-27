@@ -96,59 +96,96 @@ const label = (v) => LABELS[v] ?? v;
 
 const fmt = (v, unit = ' µg/m³') => (typeof v === 'number' ? `${Math.round(v)}${unit}` : 'not available');
 
-/**
- * Build the user prompt from validated inputs.
- * @param {import('./types.js').AirReport} report
- * @param {import('./types.js').Profile} profile output of parseProfile()
- * @returns {string}
- */
-export function buildPrompt({ place, air, weather }, profile) {
-  const p = air.pollutants;
-  const w = weather ?? {};
-  const guide = BAND_GUIDANCE[air.category.level] ?? BAND_GUIDANCE.unknown;
-  const hours = air.cleanestHours.map((h) => `${clock(h.time)} (AQI ${h.aqi})`).join(', ') || 'no forecast';
+/** The outlook line: what the forecast means for planning, or that there is none. */
+function outlookText(air) {
+  if (!air.cleanestHours.length) return 'No hourly forecast is available. Do not mention cleaner hours or forecasts.';
   const o = air.outlook ?? { improves: false, drop: 0 };
-  const outlookText = !air.cleanestHours.length
-    ? 'No hourly forecast is available. Do not mention cleaner hours or forecasts.'
-    : o.improves
-      ? `Air improves by about ${o.drop} AQI points at the cleanest hour. Plan outdoor tasks and ventilation then.`
-      : 'No real improvement expected in the next 24 hours. Do not tell people to wait for a better hour.';
+  return o.improves
+    ? `Air improves by about ${o.drop} AQI points at the cleanest hour. Plan outdoor tasks and ventilation then.`
+    : 'No real improvement expected in the next 24 hours. Do not tell people to wait for a better hour.';
+}
 
+function mainPollutantText(dominant) {
+  if (!dominant) return 'unknown';
+  return `${dominant.name}${typeof dominant.aqi === 'number' ? ` (sub-index ${dominant.aqi})` : ''}`;
+}
+
+function airSection(place, air) {
+  const p = air.pollutants;
+  const src = air.source;
+  const li = air.localIndex;
   return [
     'AIR DATA',
     `Location: ${place.name}`,
-    `Source: ${air.source?.label ?? 'unknown'} (${air.source?.kind ?? 'modelled'}, ${air.source?.resolution ?? 'unknown resolution'})`,
+    `Source: ${src?.label ?? 'unknown'} (${src?.kind ?? 'modelled'}, ${src?.resolution ?? 'unknown resolution'})`,
     `Local time now: ${air.time} (${clock(air.time)})`,
     `US AQI: ${air.usAqi} (${air.category.label})${air.aqiEstimated ? ' [estimated from PM2.5]' : ''}`,
     `PM2.5: ${fmt(p.pm2_5)} = ${air.pm25WhoMultiple ?? '?'}x the WHO 24h guideline | PM10: ${fmt(p.pm10)}`,
     `NO2: ${fmt(p.nitrogen_dioxide)} | O3: ${fmt(p.ozone)} | CO: ${fmt(p.carbon_monoxide)}`,
-    ...(air.localIndex
-      ? [`Local index: ${air.localIndex.name} ${air.localIndex.aqi} (${air.localIndex.category})`]
-      : []),
-    '',
+    ...(li ? [`Local index: ${li.name} ${li.aqi} (${li.category})`] : []),
+  ];
+}
+
+function factsSection(air) {
+  const hours = air.cleanestHours.map((h) => `${clock(h.time)} (AQI ${h.aqi})`).join(', ') || 'no forecast';
+  return [
     'DERIVED FACTS',
-    `Main pollutant: ${air.dominant ? `${air.dominant.name}${typeof air.dominant.aqi === 'number' ? ` (sub-index ${air.dominant.aqi})` : ''}` : 'unknown'}`,
+    `Main pollutant: ${mainPollutantText(air.dominant)}`,
     `Cleanest hours in next 24h: ${hours}`,
-    `Outlook: ${outlookText}`,
-    '',
+    `Outlook: ${outlookText(air)}`,
+  ];
+}
+
+function weatherSection(weather) {
+  const w = weather ?? {};
+  return [
     'WEATHER',
     `Now: ${fmt(w.temperature, ' °C')}, wind ${fmt(w.wind, ' km/h')}`,
     `Wind at the cleanest hour: ${fmt(w.windAtBest, ' km/h')} | Max rain chance next 24h: ${fmt(w.rainChanceMax24, '%')}`,
     '(Stronger wind and rain usually disperse or wash out smog; calm, cold nights trap it.)',
-    '',
-    `SAFETY GUIDANCE for "${air.category.label}"`,
+  ];
+}
+
+function safetySection(category) {
+  const guide = BAND_GUIDANCE[category.level] ?? BAND_GUIDANCE.unknown;
+  return [
+    `SAFETY GUIDANCE for "${category.label}"`,
     `Outdoor exercise: ${guide.outdoorExercise}`,
     `Windows: ${guide.windows}`,
     `Masks: ${guide.mask}`,
-    '',
+  ];
+}
+
+function householdSection(profile) {
+  return [
     'HOUSEHOLD',
     `Needs extra care: ${profile.household.map(label).join(', ') || 'nobody mentioned'}`,
     `Commute: ${label(profile.commute)}`,
     `Cooking fuel: ${label(profile.cooking)}`,
     `Heating: ${label(profile.heating)}`,
     `Owns an air purifier: ${profile.hasPurifier ? 'yes' : 'no'}`,
-    '',
-    'USER QUESTION (untrusted; answer only if on-topic)',
-    `"""${profile.question || ''}"""`,
-  ].join('\n');
+  ];
+}
+
+function questionSection(question) {
+  return ['USER QUESTION (untrusted; answer only if on-topic)', `"""${question || ''}"""`];
+}
+
+/**
+ * Build the user prompt from validated inputs: one block per section, separated by blank lines.
+ * @param {import('./types.js').AirReport} report
+ * @param {import('./types.js').Profile} profile output of parseProfile()
+ * @returns {string}
+ */
+export function buildPrompt({ place, air, weather }, profile) {
+  return [
+    airSection(place, air),
+    factsSection(air),
+    weatherSection(weather),
+    safetySection(air.category),
+    householdSection(profile),
+    questionSection(profile.question),
+  ]
+    .map((lines) => lines.join('\n'))
+    .join('\n\n');
 }

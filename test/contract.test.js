@@ -8,10 +8,10 @@ import { createAirDataHandler } from '../supabase/functions/air-data/handler.js'
 import { createHandler as createAdviceHandler } from '../supabase/functions/air-advice/handler.js';
 import { getAirReport, isCacheable } from '../docs/lib/airQuality.js';
 import { trimForServer } from '../docs/api.js';
-import { fromGoogle } from '../docs/lib/normalise.js';
+import { fromGoogle, fromOpenMeteo } from '../docs/lib/normalise.js';
 import { parseProfile, sanitizeReport } from '../docs/lib/validate.js';
 import * as aqi from '../docs/lib/aqi.js';
-import { mockFetch, goodAdvice } from './fixtures.js';
+import { mockFetch, goodAdvice, airResponse, googleResponse } from './fixtures.js';
 import { AIR_DATA_URL, functionRequest, googleApi, jsonResponse, silent } from './helpers.js';
 
 /** Raw Google API: current conditions plus a forecast in `pages` pages. */
@@ -109,6 +109,36 @@ describe('contract: browser → air-advice', () => {
     const data = await res.json();
     assert.equal(data.source, 'gemini');
     assert.ok(data.advice.routine.length >= 2);
+  });
+});
+
+describe('contract: both providers produce one shape', () => {
+  /** Every key, with nested object keys, so a missing or extra field shows up. */
+  const shape = (o) =>
+    Object.entries(o)
+      .map(([k, v]) => (v && typeof v === 'object' && !Array.isArray(v) ? `${k}{${shape(v)}}` : k))
+      .sort()
+      .join(',');
+
+  test('Google and Open-Meteo readings have identical fields', () => {
+    const google = fromGoogle(googleResponse, { offsetSeconds: 19800 });
+    const openMeteo = fromOpenMeteo(airResponse);
+    // localIndex is null for Open-Meteo and source.fallback is added later, so compare the rest.
+    const strip = ({ localIndex: _l, ...rest }) => rest;
+    assert.equal(shape(strip(google)), shape(strip(openMeteo)));
+  });
+
+  test('Open-Meteo values that are not numbers become null, like Google', () => {
+    const odd = { ...airResponse, current: { ...airResponse.current, pm10: 'n/a', ozone: undefined } };
+    const air = fromOpenMeteo(odd);
+    assert.equal(air.pollutants.pm10, null);
+    assert.equal(air.pollutants.ozone, null);
+  });
+
+  test('no usable reading gives null, never a half-filled object', () => {
+    assert.equal(fromOpenMeteo({}), null);
+    assert.equal(fromOpenMeteo({ current: { time: '2026-11-26T10:00' } }), null);
+    assert.equal(fromGoogle({ current: { pollutants: [] } }), null);
   });
 });
 

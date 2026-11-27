@@ -98,8 +98,7 @@
       "category": {
         "max": 300,
         "level": "very-unhealthy",
-        "label": "Very Unhealthy",
-        "color": "#6a1b9a"
+        "label": "Very Unhealthy"
       },
       "pollutants": {
         "pm2_5": 180.4,
@@ -795,8 +794,7 @@
       "category": {
         "max": 300,
         "level": "very-unhealthy",
-        "label": "Very Unhealthy",
-        "color": "#6a1b9a"
+        "label": "Very Unhealthy"
       },
       "pollutants": {
         "pm2_5": 150.2,
@@ -1537,8 +1535,7 @@
       "category": {
         "max": 300,
         "level": "very-unhealthy",
-        "label": "Very Unhealthy",
-        "color": "#6a1b9a"
+        "label": "Very Unhealthy"
       },
       "pollutants": {
         "pm2_5": 150.2,
@@ -2279,8 +2276,7 @@
       "category": {
         "max": 300,
         "level": "very-unhealthy",
-        "label": "Very Unhealthy",
-        "color": "#6a1b9a"
+        "label": "Very Unhealthy"
       },
       "pollutants": {
         "pm2_5": 180.4,
@@ -2978,8 +2974,7 @@
       "category": {
         "max": 300,
         "level": "very-unhealthy",
-        "label": "Very Unhealthy",
-        "color": "#6a1b9a"
+        "label": "Very Unhealthy"
       },
       "pollutants": {
         "pm2_5": 180.4,
@@ -3509,8 +3504,7 @@
       "category": {
         "max": 300,
         "level": "very-unhealthy",
-        "label": "Very Unhealthy",
-        "color": "#6a1b9a"
+        "label": "Very Unhealthy"
       },
       "pollutants": {
         "pm2_5": 180.4,

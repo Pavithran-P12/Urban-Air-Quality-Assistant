@@ -278,7 +278,10 @@ describe('Issue 4: timeout budget and caching', () => {
     const fetchImpl = (url, init) =>
       String(url).includes('air-data') ? slowFetch(1000, () => json(googleResponse))(url, init) : base(url, init);
     const started = Date.now();
-    assert.equal(await fetchGoogleAirBrowser(AIR_DATA, 1, 2, fetchImpl, 50), null);
+    assert.equal(
+      await fetchGoogleAirBrowser(AIR_DATA, { latitude: 1, longitude: 2 }, { fetchImpl, timeoutMs: 50 }),
+      null,
+    );
     assert.ok(Date.now() - started < 500);
 
     const report = await getAirReport({ city: 'Delhi' }, fetchImpl, { airDataUrl: AIR_DATA, airDataTimeoutMs: 50 });

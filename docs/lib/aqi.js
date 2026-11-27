@@ -1,37 +1,38 @@
 /**
  * US AQI helpers. Bands follow the US EPA Air Quality Index scale.
  * @see https://www.airnow.gov/aqi/aqi-basics/
+ * Band colours live in styles.css (--aqi-*), checked with the dataviz palette validator.
  */
+import { isNum } from './guards.js';
+import { LOOKAHEAD_HOURS } from './forecast.js';
 
-export const AQI_BANDS = Object.freeze([
-  { max: 50, level: 'good', label: 'Good', color: '#2e7d32' },
-  { max: 100, level: 'moderate', label: 'Moderate', color: '#b28704' },
-  { max: 150, level: 'sensitive', label: 'Unhealthy for Sensitive Groups', color: '#e65100' },
-  { max: 200, level: 'unhealthy', label: 'Unhealthy', color: '#c62828' },
-  { max: 300, level: 'very-unhealthy', label: 'Very Unhealthy', color: '#6a1b9a' },
-  { max: Infinity, level: 'hazardous', label: 'Hazardous', color: '#4e0d1f' },
+const AQI_BANDS = Object.freeze([
+  { max: 50, level: 'good', label: 'Good' },
+  { max: 100, level: 'moderate', label: 'Moderate' },
+  { max: 150, level: 'sensitive', label: 'Unhealthy for Sensitive Groups' },
+  { max: 200, level: 'unhealthy', label: 'Unhealthy' },
+  { max: 300, level: 'very-unhealthy', label: 'Very Unhealthy' },
+  { max: Infinity, level: 'hazardous', label: 'Hazardous' },
 ]);
-
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
 /**
  * Map a US AQI value to its band.
  * @param {number} aqi
- * @returns {{max:number, level:string, label:string, color:string}}
+ * @returns {{max:number, level:string, label:string}}
  */
 export function categorize(aqi) {
   if (!isNum(aqi) || aqi < 0) {
-    return { max: NaN, level: 'unknown', label: 'Unknown', color: '#546e7a' };
+    return { max: NaN, level: 'unknown', label: 'Unknown' };
   }
   return AQI_BANDS.find((band) => aqi <= band.max);
 }
 
 /** WHO 2021 24-hour PM2.5 guideline, in µg/m³. */
-export const WHO_PM25_24H = 15;
+const WHO_PM25_24H = 15;
 
 /**
  * How many times above the WHO daily PM2.5 guideline a reading is.
- * @param {number} pm25
+ * @param {unknown} pm25 µg/m³; anything that is not a usable number gives null
  * @returns {number|null}
  */
 export function pm25Multiple(pm25) {
@@ -96,7 +97,7 @@ export function dominantPollutant(subIndices = {}) {
 export function cleanestHours(hourly, count = 3) {
   if (!hourly?.time?.length || !hourly?.us_aqi?.length) return [];
   return hourly.time
-    .slice(0, 24)
+    .slice(0, LOOKAHEAD_HOURS)
     .map((time, i) => ({ time, aqi: hourly.us_aqi[i] }))
     .filter((h) => isNum(h.aqi))
     .sort((a, b) => a.aqi - b.aqi)
@@ -105,7 +106,7 @@ export function cleanestHours(hourly, count = 3) {
 }
 
 /** An AQI drop smaller than this is not worth re-planning the day around. */
-export const MEANINGFUL_DROP = 15;
+const MEANINGFUL_DROP = 15;
 
 /**
  * Describe whether air gets meaningfully cleaner in the next 24 h.
